@@ -32,6 +32,17 @@ DT = 1.0 / 60.0
 # diverge. These caps turn that into a visible error instead of a hang.
 MAX_STEPS = 100_000
 
+# --- Control scheme ----------------------------------------------------------
+# The player uses toggle-direction control: they always run at full speed and
+# the direction keys only choose which way. A level therefore has to give the
+# player time to react to a hazard they did not choose to approach, because
+# they arrive at full speed with no way to stop except turning around.
+#
+# At 190 px/s a player covers ~3 tiles per 0.5 s, and the shortest human
+# reaction-plus-settle is around 0.4 s. A level whose first hazard is closer
+# than this to the spawn is unfair, not hard.
+AUTO_RUN_REACTION_MARGIN = 0.6   # seconds of clear running before the first hazard
+
 
 def jump_height() -> float:
     """Peak height of a full-hold jump, in pixels."""
@@ -135,6 +146,7 @@ def main() -> int:
     # that file's tutorial() changes.
     print("Level 1 checks")
     FLOOR_ROW = 17
+    SPAWN_COL = 5
     STEP_ROW, STEP_COL0, STEP_COL1 = 16, 4, 8
     PIT_COL0, PIT_COL1 = 13, 14
     PILLAR_COL, PILLAR_TOP_ROW = 19, 14
@@ -186,6 +198,16 @@ def main() -> int:
     if SHAFT_ROOF_ROW >= GOAL_ROW:
         problems.append("the shaft is not roofed above the goal, so the climb can be skipped")
 
+    # Under toggle control the player leaves the spawn already running at full
+    # speed, so the first hazard needs enough clear ground to be seen coming.
+    runway_tiles = PIT_COL0 - SPAWN_COL
+    runway_seconds = runway_tiles * TILE / MAX_SPEED
+    if runway_seconds < AUTO_RUN_REACTION_MARGIN:
+        problems.append(
+            f"the first hazard is only {runway_seconds:.2f}s from the spawn "
+            f"({runway_tiles} tiles); with auto-run the player needs "
+            f"{AUTO_RUN_REACTION_MARGIN:.1f}s to react")
+
     # A player dropped through the doorway must be able to reach the far wall,
     # or the shaft is a trap rather than a puzzle.
     if interior_px > distance:
@@ -229,6 +251,13 @@ def main() -> int:
             True,
             "the shaft floor carries no spikes, so a player who steps through the "
             "doorway lands safely and simply tries the climb again",
+        ),
+        (
+            "there is runway before the first hazard",
+            runway_seconds >= AUTO_RUN_REACTION_MARGIN,
+            f"the spike pit is {runway_seconds:.2f}s of running from the spawn "
+            f"({runway_tiles} tiles); with toggle-direction control the player is "
+            "already at full speed and needs time to react",
         ),
         (
             "every step of the intro route is playable",

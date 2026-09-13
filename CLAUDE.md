@@ -32,18 +32,23 @@ $GODOT --headless --path . --import
 
 ### Checks (run these after touching levels, physics, or save data)
 
-There is no CI. Four scripts under `tools/` are the test suite; each exits non-zero on failure and prints what went wrong.
+There is no CI. Five scripts under `tools/` are the test suite; each exits non-zero on failure and prints what went wrong.
 
 ```bash
 # 1. The movement envelope, and whether level 1's geometry is actually playable
 python3 tools/verify_level_geometry.py
 
-# 2. Every level bakes terrain, spawns a player, places a goal
+# 2. The direction-toggle control scheme (auto-run, flipping, wall-jump turn)
+$GODOT --headless --path . --script res://tools/test_control_scheme.gd
+
+# 3. Every level bakes terrain, spawns a player, places a goal
 $GODOT --headless --path . --script res://tools/smoke_test_levels.gd
 
-# 3. Save/progression behaviour (unlocks, best times, persistence, reset)
+# 4. Save/progression behaviour (unlocks, best times, persistence, reset)
 $GODOT --headless --path . --script res://tools/test_progression.gd
 ```
+
+`tools/measure_jump_arc.gd` measures the real jump arc by running the actual scene headless. `verify_level_geometry.py` mirrors the same physics in Python, which is much faster; when a number looks wrong, run the measurement and compare. (They should agree: 1.84 tiles held, 3.86 tiles range.)
 
 Level scenes are **generated** — see "Level authoring" below. Regenerating and re-verifying is the normal loop:
 
@@ -114,6 +119,13 @@ Tiles are **32×32**. Level 1 is a real tutorial; levels 2–9 are runnable skel
 ### Player (`scenes/game/player/`)
 
 `CharacterBody2D` with a state enum (IDLE/RUN/JUMP/FALL/WALL_SLIDE/DEAD) and the forgiveness mechanics that make a precision platformer feel fair: variable jump height, coyote time, jump buffering, wall slide, and wall jump with a brief input lockout so the player cannot steer straight back into the wall.
+
+**Control scheme: the player always runs.** `toggle_direction_control` (default on) makes the direction keys choose *which way to face* rather than whether to move; the player then accelerates there on its own. This suits a handheld D-pad, where holding a direction for a whole level is tiring. The persistent `facing` value is the single source of truth for horizontal direction under both schemes, so `_get_move_direction()` is scheme-agnostic. Set `toggle_direction_control = false` on the player to get the traditional hold-to-move feel (a wall slide then requires pushing into the wall, which auto-run cannot detect).
+
+Two consequences to keep in mind:
+
+- **A wall jump flips `facing` away from the wall.** Without that, auto-run would immediately steer the player back into the wall they just launched off.
+- **Levels must give the player runway.** They arrive at hazards at full speed, unable to stop except by turning around. `verify_level_geometry.py` asserts at least `AUTO_RUN_REACTION_MARGIN` (0.6s) of clear ground between the spawn and the first hazard. Level 1 has 1.35s.
 
 Every tunable is an `@export`, so feel can be dialled in from the inspector while the game runs. **The level designs depend on these numbers** — if you change them, re-run `tools/verify_level_geometry.py`, which mirrors the constants and checks the levels are still playable. Collision layers: player is layer 2; terrain is layer 1; spikes mask layer 2.
 

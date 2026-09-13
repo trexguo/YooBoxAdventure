@@ -58,6 +58,25 @@ enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, DEAD }
 ## If true, the player slides down walls without holding into them.
 @export var auto_wall_slide : bool = false
 
+@export_group("Control Scheme")
+## If true, the player always runs: pressing a direction key sets which way they
+## face and they accelerate that way on their own, rather than only moving while
+## the key is held.
+##
+## This suits a handheld D-pad, where holding a direction for the whole level is
+## tiring. Set it to false for the traditional hold-to-move feel.
+@export var toggle_direction_control : bool = true
+## How quickly the player accelerates up to full speed under toggle control.
+## Kept separate from [member ground_acceleration] because the two are doing
+## different jobs: this is the turnaround, not the response to a held key.
+@export var turn_acceleration : float = 1400.0
+## If true, releasing all direction keys stops the player instead of leaving
+## them running. Off by default: a precision platformer reads better when the
+## character keeps its momentum.
+@export var stop_when_no_direction : bool = false
+## Facing chosen when the level starts. 1 is right, -1 is left.
+@export var initial_facing : int = 1
+
 @export_group("Detection")
 ## Reach of the wall-detection rays, in pixels.
 @export var wall_check_distance : float = 6.0
@@ -74,12 +93,24 @@ var _time_since_grounded : float = 0.0
 var _jump_buffer_timer : float = 0.0
 ## Counts down after a wall jump, suppressing steering back into the wall.
 var _wall_jump_lockout_timer : float = 0.0
+## Set once a jump's rise has been cut short, so the cut is not re-applied.
+var _jump_cut_applied : bool = false
 ## Which side the wall is on: -1 left, 1 right, 0 none.
 var _wall_direction : int = 0
 ## Facing of the last wall jumped from, so wall jumps alternate sides.
 var _wall_jump_origin_direction : int = 0
 ## External control lock, e.g. during a level transition.
 var _input_enabled : bool = true
+
+## Which way the player is heading: 1 right, -1 left.
+##
+## Under toggle control this is the authoritative direction and persists when no
+## key is held. Under hold-to-move control it mirrors the keys and falls to 0
+## when nothing is pressed.
+var facing : int = 1
+## Set while a direction key is physically held, so toggle control can tell
+## "still pushing the same way" from "tapped and released".
+var _direction_held : int = 0
 
 @onready var _wall_check_left : RayCast2D = $WallCheckLeft
 @onready var _wall_check_right : RayCast2D = $WallCheckRight
@@ -94,6 +125,7 @@ func _set_state(new_state : State) -> void:
 func _ready() -> void:
 	add_to_group(&"player")
 	GameState.mark_level_reached(scene_file_path)
+	facing = -1 if initial_facing < 0 else 1
 
 # --- Public API --------------------------------------------------------------
 
@@ -104,8 +136,12 @@ func respawn_at(position_ : Vector2) -> void:
 	velocity = Vector2.ZERO
 	_wall_jump_lockout_timer = 0.0
 	_jump_buffer_timer = 0.0
+	_jump_cut_applied = false
 	_time_since_grounded = 0.0
 	_input_enabled = true
+	_direction_held = 0
+	# Restart facing the level's default way, so a respawn is consistent.
+	facing = -1 if initial_facing < 0 else 1
 	_set_state(State.FALL)
 
 ## Kills the player and asks the level to respawn them.
@@ -135,10 +171,39 @@ func _get_level() -> Node:
 		node = node.get_parent()
 	return null
 
-func _get_horizontal_input() -> float:
+## Reads the direction keys and updates [member facing].
+##
+## Under toggle control a fresh press sets the facing, which then persists. The
+## player keeps running that way with no key held. Under hold-to-move control
+## the facing follows the keys and drops to 0 when they are released.
+func _update_facing() -> void:
+	var input := Input.get_axis(&"move_left", &"move_right") if _input_enabled else 0.0
+	var pressed := 0
+	if input > 0.5:
+		pressed = 1
+	elif input < -0.5:
+		pressed = -1
+
+	if not toggle_direction_control:
+		_direction_held = pressed
+		facing = pressed
+		return
+
+	# Toggle mode: a new press (or a change of direction) sets the facing.
+	if pressed != 0 and pressed != _direction_held:
+		facing = pressed
+	_direction_held = pressed
+	if pressed == 0 and stop_when_no_direction:
+		facing = 0
+
+## Returns the horizontal direction to move this frame.
+##
+## Both control schemes read the same [member facing] value; they differ only in
+## how it is produced (see [method _update_facing]).
+func _get_move_direction() -> float:
 	if not _input_enabled:
 		return 0.0
-	return Input.get_axis(&"move_left", &"move_right")
+	return float(facing)
 
 func _is_jump_just_pressed() -> bool:
 	return _input_enabled and Input.is_action_just_pressed(&"jump")
@@ -165,8 +230,13 @@ func _can_wall_slide() -> bool:
 		return false
 	if auto_wall_slide:
 		return true
-	# Require the player to be pushing into the wall.
-	return signf(_get_horizontal_input()) == float(_wall_direction)
+	# Under toggle control the player is always running, so a slide starts
+	# whenever they touch a wall with any downward speed: there is no "pushing
+	# into the wall" to detect.
+	if toggle_direction_control:
+		return true
+	# Hold-to-move: require the keys to be pushing into the wall.
+	return signf(_get_move_direction()) == float(_wall_direction)
 
 func _apply_gravity(delta : float) -> void:
 	var gravity := rise_gravity if velocity.y < 0.0 else fall_gravity
@@ -176,13 +246,19 @@ func _apply_gravity(delta : float) -> void:
 	velocity.y = minf(velocity.y + gravity * delta, max_fall_speed)
 
 func _apply_horizontal_movement(delta : float) -> void:
-	var direction := _get_horizontal_input()
+	var direction := _get_move_direction()
 	# Ignore steering back into the wall right after a wall jump.
 	if _wall_jump_lockout_timer > 0.0 and direction == float(_wall_jump_origin_direction):
 		direction = 0.0
 	var on_ground := is_on_floor()
 	if not is_zero_approx(direction):
 		var acceleration := ground_acceleration if on_ground else air_acceleration
+		if toggle_direction_control:
+			acceleration = turn_acceleration
+		# A direction change is a reversal, not just a nudge: use the faster
+		# turnaround so the character does not slide the wrong way for a moment.
+		elif signf(direction) != signf(velocity.x) and not is_zero_approx(velocity.x):
+			acceleration = turn_acceleration
 		velocity.x = move_toward(velocity.x, direction * max_speed, acceleration * delta)
 	else:
 		var friction := ground_friction if on_ground else air_friction
@@ -191,10 +267,14 @@ func _apply_horizontal_movement(delta : float) -> void:
 func _do_jump(velocity_y : float) -> void:
 	velocity.y = velocity_y
 	_jump_buffer_timer = 0.0
+	_jump_cut_applied = false
 	_time_since_grounded = 999.0  # Consume coyote time so it cannot double-fire.
 
 func _do_wall_jump() -> void:
 	_wall_jump_origin_direction = _wall_direction
+	# Turn to face the way we are leaving, or toggle control would immediately
+	# steer the player back into the wall we just jumped off.
+	facing = -_wall_direction
 	velocity.x = -float(_wall_direction) * wall_jump_push
 	_do_jump(-wall_jump_velocity)
 	_wall_jump_lockout_timer = wall_jump_lockout
@@ -230,19 +310,30 @@ func _physics_process(delta : float) -> void:
 	if _is_jump_just_pressed():
 		_jump_buffer_timer = jump_buffer_time
 
+	_update_facing()
 	_update_wall_direction()
 
 	var can_ground_jump := is_on_floor() or _time_since_grounded <= coyote_time
 	var has_buffered_jump := _jump_buffer_timer > 0.0
 
+	var jumped_this_frame := false
 	if has_buffered_jump and _wall_direction != 0 and not is_on_floor():
 		_do_wall_jump()
+		jumped_this_frame = true
 	elif has_buffered_jump and can_ground_jump:
 		_do_jump(-jump_velocity)
+		jumped_this_frame = true
 
 	# Cut the jump short when the button is released while still rising.
-	if velocity.y < 0.0 and not _is_jump_held():
+	#
+	# Two details matter. First it must fire at most once per jump: applying the
+	# multiplier every frame compounds it (0.45, 0.20, 0.09 ...) and kills the
+	# jump outright. Second it is skipped on the launch frame, so a one-frame tap
+	# still gets a full frame of the launch velocity rather than losing half of
+	# it before the player has moved at all.
+	if velocity.y < 0.0 and not _is_jump_held() and not jumped_this_frame and not _jump_cut_applied:
 		velocity.y *= jump_cut_multiplier
+		_jump_cut_applied = true
 
 	_apply_gravity(delta)
 	_apply_horizontal_movement(delta)
@@ -258,7 +349,7 @@ func _resolve_state() -> void:
 	if _can_wall_slide():
 		_set_state(State.WALL_SLIDE)
 	elif is_on_floor():
-		_set_state(State.IDLE if is_zero_approx(_get_horizontal_input()) else State.RUN)
+		_set_state(State.IDLE if is_zero_approx(_get_move_direction()) else State.RUN)
 	elif velocity.y < 0.0:
 		_set_state(State.JUMP)
 	else:
