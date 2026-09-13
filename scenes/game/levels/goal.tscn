@@ -1,0 +1,17 @@
+[gd_scene format=3 uid="uid://c0goal7x2vqpe"]
+
+[ext_resource type="Texture2D" path="res://assets/placeholder/goal.png" id="1_goaltex"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_goal"]
+size = Vector2(32, 32)
+
+[node name="Goal" type="Area2D"]
+collision_layer = 0
+collision_mask = 2
+monitoring = true
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("1_goaltex")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_goal")

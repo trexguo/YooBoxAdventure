@@ -1,0 +1,52 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scenes/game/levels/level.gd" id="1_4as71"]
+[ext_resource type="Script" path="res://scenes/game/levels/level_tile_builder.gd" id="2_c5rp6"]
+[ext_resource type="TileSet" path="res://resources/tilesets/placeholder_terrain.tres" id="3_vvw4m"]
+
+[node name="Level7" type="Node2D" unique_id=2035091979]
+script = ExtResource("1_4as71")
+next_level_path = "res://scenes/game/levels/level_8.tscn"
+
+[node name="Background" type="CanvasLayer" parent="." unique_id=113831115]
+layer = -10
+
+[node name="ColorRect" type="ColorRect" parent="Background" unique_id=1139047180]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.078431375, 0.08627451, 0.12156863, 1)
+
+[node name="TileBuilder" type="Node" parent="." unique_id=834826662]
+script = ExtResource("2_c5rp6")
+map = "############################################################
+#..........................................................#
+#..........................................................#
+#..........................................................#
+#..........................................................#
+#..........................................................#
+#..........................................................#
+#............................................G.............#
+#.........................................#######..........#
+#.............................#####........................#
+#..........................................................#
+#....................#####.................................#
+#..........................................................#
+#...........#####..........................................#
+#....P.....................................................#
+#...#####..................................................#
+#...................^^^....................................#
+############################################################
+############################################################
+############################################################"
+
+[node name="Terrain" type="TileMapLayer" parent="TileBuilder" unique_id=862142003]
+tile_set = ExtResource("3_vvw4m")
+
+[node name="TerrainCollision" type="StaticBody2D" parent="TileBuilder" unique_id=88632742]
+collision_mask = 0
+
+[node name="Hazards" type="Node2D" parent="TileBuilder" unique_id=218447068]
+
+[node name="SpawnPoint" type="Marker2D" parent="." unique_id=1052279712]
+unique_name_in_owner = true

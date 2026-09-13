@@ -13,17 +13,41 @@ const FILE_PATH = "res://scripts/game_state.gd"
 
 static func get_level_state(level_state_key : String) -> LevelState:
 	level_state_key = ResourceUID.ensure_path(level_state_key)
-	if not has_game_state(): 
+	if not has_game_state():
 		return
 	var game_state := get_or_create_state()
 	if level_state_key.is_empty() : return
 	if level_state_key in game_state.level_states:
-		return game_state.level_states[level_state_key] 
+		return game_state.level_states[level_state_key]
 	else:
 		var new_level_state := LevelState.new()
 		game_state.level_states[level_state_key] = new_level_state
 		GlobalState.save()
 		return new_level_state
+
+## Flags a level as reached so it unlocks in the level select menu.
+## Called when a level actually starts playing, so that merely setting a
+## checkpoint ahead of the player does not unlock unreached levels.
+static func mark_level_reached(level_path : String) -> void:
+	var level_state := get_level_state(level_path)
+	if level_state == null or level_state.reached:
+		return
+	level_state.reached = true
+	GlobalState.save()
+
+## Records a level completion and its time, unlocking the next level.
+static func record_level_completed(level_path : String, time : float) -> void:
+	var level_state := get_level_state(level_path)
+	if level_state == null:
+		return
+	level_state.record_completion(time)
+	GlobalState.save()
+
+## True if the player has reached at least one level, i.e. a game is in progress.
+static func has_progress() -> bool:
+	if not has_game_state():
+		return false
+	return not get_or_create_state().checkpoint_level_path.is_empty()
 
 static func has_game_state() -> bool:
 	return GlobalState.has_state(STATE_NAME)

@@ -27,3 +27,7 @@ Exports/
 # Plugin specific
 addons/script-ide/
 addons/ef_ds_uids/
+
+# Python tooling artifacts (tools/*.py are authoring scripts, not runtime)
+__pycache__/
+*.pyc

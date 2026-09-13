@@ -16,19 +16,28 @@ func load_game_scene() -> void:
 	super.load_game_scene()
 
 func new_game() -> void:
-	if confirm_new_game and continue_game_button.visible:
+	# Confirm whenever there is progress to lose, not merely when the Continue
+	# button happens to be showing. A player mid-progress who has not yet
+	# finished a level would otherwise wipe their save with one click.
+	if confirm_new_game and GameState.has_progress():
 		new_game_confirmation.show()
 	else:
 		GameState.reset()
 		load_game_scene()
 
-func _add_level_select_if_set() -> void: 
-	if level_select_packed_scene == null: return
-	if GameState.get_levels_reached() <= 1 : return
+## The level select menu is always offered: locked rows show the player what is
+## ahead, and replaying an already-unlocked level is a supported flow.
+func _add_level_select_if_set() -> void:
+	if level_select_packed_scene == null:
+		return
 	level_select_button.show()
 
+## The Continue button appears whenever there is progress to resume. It checks
+## the checkpoint rather than the last-played level, so finding a level by its
+## checkpoint (and replaying from it) both count as being in progress.
 func _show_continue_if_set() -> void:
-	if GameState.get_current_level_path().is_empty(): return
+	if not GameState.has_progress():
+		return
 	continue_game_button.show()
 
 func _ready() -> void:

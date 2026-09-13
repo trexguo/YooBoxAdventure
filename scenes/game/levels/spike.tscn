@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bojffrnyee0w6"]
+
+[ext_resource type="Texture2D" path="res://assets/placeholder/spike.png" id="1_spiketex"]
+
+[node name="Spike" type="Sprite2D"]
+texture = ExtResource("1_spiketex")
