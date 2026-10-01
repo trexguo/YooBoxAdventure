@@ -29,6 +29,8 @@ func _run_suite() -> void:
 	await _test_death_animation_and_respawn()
 	await _test_air_dash()
 	await _test_dash_wall_collision()
+	await _test_screen_controls()
+	await _test_side_swipes()
 
 # --- World helpers -----------------------------------------------------------
 
@@ -409,4 +411,129 @@ func _test_dash_wall_collision() -> void:
 		player.position.x <= 374.1 and player._dash_timer <= 0,
 		"move_and_slide must preserve terrain collision")
 	_release_all()
+	world[0].free()
+
+func _touch(index: int, at: Vector2, pressed: bool, cancelled: bool = false) -> void:
+	var event := InputEventScreenTouch.new()
+	event.index = index
+	event.position = at
+	event.pressed = pressed
+	event.canceled = cancelled
+	get_viewport().push_input(event)
+
+func _drag(index: int, at: Vector2) -> void:
+	var event := InputEventScreenDrag.new()
+	event.index = index
+	event.position = at
+	get_viewport().push_input(event)
+
+func _mouse(pressed: bool) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.position = Vector2(500,300)
+	event.pressed = pressed
+	get_viewport().push_input(event)
+
+func _test_screen_controls() -> void:
+	var world := _make_world(200)
+	var player = world[1]
+	player.toggle_direction_control = false
+	await _step(30)
+	_mouse(true)
+	await _step(8)
+	_expect("mouse press launches a held jump",player.velocity.y < 0 and player._is_jump_held(),"screen press must use the normal jump physics")
+	_mouse(false)
+	await _step(2)
+	_expect("mouse release cuts jump",not player._is_jump_held() and player._jump_cut_applied,"release must preserve variable jump height")
+	player.respawn_at(Vector2(200,-1))
+	await _step(5)
+	_touch(0,Vector2(500,300),true)
+	_drag(0,Vector2(505,365))
+	await _step(2)
+	_expect("quick ground swipe crouches without jumping",player._crouched and player.is_on_floor(),"gesture recognition must avoid an accidental jump")
+	_touch(1,Vector2(700,300),true)
+	_touch(1,Vector2(700,300),false)
+	await _step(2)
+	_expect("second finger cannot release crouch",player._crouched,"only the owning finger controls the gesture")
+	_touch(0,Vector2(505,365),false)
+	await _step(3)
+	_expect("releasing swipe stands up",not player._crouched,"release must restore the standing body when clear")
+	_touch(0,Vector2(500,300),true)
+	_touch(0,Vector2(500,300),false)
+	await _step(2)
+	_expect("short touch tap jumps",player.velocity.y < 0,"tap shorter than recognition window must still jump")
+	player.respawn_at(Vector2(200,-500))
+	await _step(2)
+	_touch(0,Vector2(500,300),true)
+	_drag(0,Vector2(500,365))
+	await _step(2)
+	_expect("air swipe starts dash",player.state == player.State.DASH,"air swipe must share the crouch key dash ability")
+	_touch(0,Vector2(500,365),false)
+	await _step(12)
+	_touch(0,Vector2(500,300),true)
+	_drag(0,Vector2(500,365))
+	await _step(2)
+	_expect("air swipe cannot bypass dash recharge",player._dash_timer <= 0,"touch must respect one dash per airtime")
+	_touch(0,Vector2(500,365),false)
+	player.respawn_at(Vector2(200,-1))
+	await _step(5)
+	_touch(0,Vector2(500,300),true)
+	_touch(0,Vector2(500,300),false,true)
+	await _step(8)
+	_expect("cancelled touch does not jump",player.is_on_floor() and player._pointer_id == -2,"cancel must clear the gesture")
+	var button := Button.new()
+	button.position = Vector2(460,260)
+	button.size = Vector2(100,100)
+	button.add_to_group("gameplay_pointer_blocker")
+	add_child(button)
+	_touch(0,Vector2(500,300),true)
+	_touch(0,Vector2(500,300),false)
+	await _step(8)
+	_expect("UI touch never jumps",player.is_on_floor() and player._pointer_id == -2,"pause button touches must belong to UI")
+	button.free()
+	_touch(0,Vector2(500,300),true)
+	_drag(0,Vector2(500,365))
+	await _step(2)
+	get_tree().paused = true
+	get_tree().paused = false
+	await _step(2)
+	_expect("pause clears held screen gestures",player._pointer_id == -2 and not player._crouched,"returning from pause must not leave input stuck")
+	world[0].free()
+
+func _test_side_swipes() -> void:
+	var world := _make_world(200)
+	var player = world[1]
+	player.position = Vector2(1000,-1)
+	await _step(10)
+	_touch(0,Vector2(500,300),true)
+	_drag(0,Vector2(482,305))
+	_expect("small pointer jitter keeps direction",player._pointer_direction_pending == 0,"motion below threshold must not turn")
+	_drag(0,Vector2(464,305))
+	await _step(2)
+	_expect("short left swipe turns without jumping or crouching",player.facing == -1 and player.is_on_floor() and not player._crouched,"horizontal gestures must not become jump or down swipe")
+	_touch(0,Vector2(464,305),false)
+	await _step(25)
+	_expect("left swipe direction persists after release",player.facing == -1 and player.velocity.x < -250,"autorun must keep the selected direction")
+	_touch(0,Vector2(500,300),true)
+	_drag(0,Vector2(536,296))
+	_touch(0,Vector2(536,296),false)
+	await _step(25)
+	_expect("right swipe reverses and keeps running",player.facing == 1 and player.velocity.x > 250 and player.is_on_floor(),"swipe right must reverse a leftward run")
+	player.respawn_at(Vector2(1000,-500))
+	await _step(2)
+	_touch(0,Vector2(500,300),true)
+	_drag(0,Vector2(464,305))
+	_touch(0,Vector2(464,305),false)
+	await _step(3)
+	_expect("air side swipe steers without spending dash",player.facing == -1 and player._dash_available and player._dash_timer <= 0,"side steering must preserve the air dash charge")
+	player.respawn_at(Vector2(1000,-1))
+	await _step(10)
+	_mouse(true)
+	var motion := InputEventMouseMotion.new()
+	motion.position = Vector2(464,300)
+	motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	get_viewport().push_input(motion)
+	_mouse(false)
+	await _step(25)
+	_expect("mouse side drag also changes direction",player.facing == -1 and player.velocity.x < -250 and player.is_on_floor(),"mouse and finger must share swipe behavior")
 	world[0].free()

@@ -8,14 +8,11 @@ var _level: Node2D
 var _player: Node2D
 var _tween: Tween
 var _hud: CanvasLayer
-var _title: Label
-var _dash_status: Label
-var _status: Label
-var _hint: Label
-var _caption: Label
-var _skip: Button
+var _timer: Label
+var _pause_menu: Control
 var _hud_clock := 0.0
 var _intro: bool = false
+var _waiting_at_exit := false
 @onready var boss: Node2D = $ZhangAss
 @onready var yoo: Node2D = $Yoo
 
@@ -34,39 +31,59 @@ func configure(level: Node2D, data: Dictionary) -> void:
 		play_intro.call_deferred()
 	else:
 		intro_has_finished = true
-
-func _label(at: Vector2, size: int, color: Color) -> Label:
-	var label := Label.new()
-	label.position = at
-	label.add_theme_font_size_override("font_size",size)
-	label.add_theme_color_override("font_color",color)
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud.add_child(label)
-	return label
+		_place_exit_waiters()
 
 func _build_hud() -> void:
 	_hud = CanvasLayer.new()
 	_hud.layer = 15
 	add_child(_hud)
-	var panel := ColorRect.new()
-	panel.position = Vector2(16,16)
-	panel.size = Vector2(710,88)
-	panel.color = Color("202533")
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud.add_child(panel)
-	_title = _label(Vector2(30,24),24,Color(design.accent))
-	_title.text = "%02d / %s" % [int(design.number),design.title]
-	_status = _label(Vector2(30,57),17,Color("d8dfeb"))
-	_hint = _label(Vector2(30,80),14,Color("a5b5c9"))
-	_hint.text = "A / D: direction   SPACE / X: jump   S / B: crouch / air dash"
-	_dash_status = _label(Vector2(770,30),20,Color("ffda86"))
-	_caption = _label(Vector2(32,660),23,Color("ffda86"))
-	_skip = Button.new()
-	_skip.text = "Skip / Enter"
-	_skip.position = Vector2(1100,24)
-	_skip.pressed.connect(_finish_intro)
-	_hud.add_child(_skip)
-	_skip.hide()
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hud.add_child(root)
+	_timer = Label.new()
+	_timer.name = "RunTimer"
+	_timer.text = "00:00.0"
+	_timer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_timer.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_timer.add_theme_font_size_override("font_size",32)
+	_timer.add_theme_color_override("font_color",Color("fff4d6"))
+	_timer.add_theme_color_override("font_outline_color",Color("302536"))
+	_timer.add_theme_constant_override("outline_size",4)
+	_timer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_timer)
+	_timer.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_timer.offset_left = -120
+	_timer.offset_right = 120
+	_timer.offset_top = 20
+	_timer.offset_bottom = 84
+	var pause_button := Button.new()
+	pause_button.name = "PauseButton"
+	pause_button.add_to_group("gameplay_pointer_blocker")
+	pause_button.icon = preload("res://assets/ui/pause.svg")
+	pause_button.tooltip_text = "Pause / Esc"
+	pause_button.theme_type_variation = &"BlueButton"
+	pause_button.position = Vector2(20,20)
+	pause_button.custom_minimum_size = Vector2(64,64)
+	root.add_child(pause_button)
+	for state in ["normal","hover","pressed","disabled"]:
+		var style := pause_button.get_theme_stylebox(state).duplicate() as StyleBoxFlat
+		style.content_margin_left = 16
+		style.content_margin_right = 16
+		pause_button.add_theme_stylebox_override(state,style)
+	pause_button.pressed.connect(_pause_game)
+
+func _pause_game() -> void:
+	var controller := get_tree().current_scene.find_child("PauseMenuController",true,false)
+	if controller:
+		controller.pause()
+		return
+	# Standalone level previews use the same pause menu as the full game.
+	if not is_instance_valid(_pause_menu):
+		_pause_menu = load("res://scenes/windows/pause_menu.tscn").instantiate()
+		_pause_menu.hide()
+		_level.add_child(_pause_menu)
+	_pause_menu.show()
 
 func _lock_player(locked: bool) -> void:
 	if not is_instance_valid(_player):
@@ -80,8 +97,13 @@ func _lock_player(locked: bool) -> void:
 func play_intro() -> void:
 	cinematic_active = true
 	_intro = true
+	_waiting_at_exit = false
+	if yoo.get_parent() != self:
+		yoo.reparent(self)
+	yoo.scale = Vector2.ONE
+	yoo.rotation = 0.0
+	boss.running = false
 	_lock_player(true)
-	_skip.show()
 	var floor_y := float(design.floor_row)*32.0
 	_player.global_position.y = floor_y - 0.1
 	_player.reset_physics_interpolation()
@@ -91,15 +113,12 @@ func play_intro() -> void:
 	boss.show()
 	yoo.show()
 	yoo.worried = true
-	_caption.text = "ZhangAss: Special delivery. Yoo is coming with me!"
 	_tween = create_tween()
 	_tween.tween_interval(0.5)
 	_tween.tween_property(boss,"position:x",start.x+60,0.3)
 	_tween.tween_callback(_grab_yoo)
 	_tween.tween_interval(0.35)
-	_tween.tween_callback(func():
-		boss.running = true
-		_caption.text = "Yoo: Help!    /    Chase ZhangAss!")
+	_tween.tween_callback(func(): boss.running = true)
 	_tween.tween_property(boss,"position",start+Vector2(1050,-90),1.1).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_tween.tween_callback(_finish_intro)
 
@@ -118,32 +137,35 @@ func _finish_intro() -> void:
 	_intro = false
 	cinematic_active = false
 	intro_has_finished = true
-	boss.hide()
-	yoo.hide()
-	_skip.hide()
-	_caption.text = ""
+	_place_exit_waiters()
 	_lock_player(false)
 	intro_finished.emit()
 
-func play_outro() -> void:
-	cinematic_active = true
-	_lock_player(true)
-	if yoo.get_parent() != self:
-		yoo.reparent(self)
-	yoo.scale = Vector2.ONE
-	yoo.rotation = 0.0
-	boss.position = _level.get_node("Goal").position+Vector2(60,18)
-	yoo.position = boss.position+Vector2(42,-8)
+## The kidnappers are already visible when the player approaches the exit.
+## Death/retry leaves them here; reaching the goal starts their escape in place.
+func _place_exit_waiters() -> void:
+	if _waiting_at_exit:
+		return
+	boss.position = _level.get_node("Goal").position + Vector2(88,16)
+	boss.running = false
+	_grab_yoo()
+	yoo.worried = true
+	yoo.queue_redraw()
 	boss.show()
 	yoo.show()
-	boss.running = false
-	_caption.text = "ZhangAss: Too slow! Next shipment!"
+	_waiting_at_exit = true
+
+func play_outro() -> void:
+	if _intro:
+		_finish_intro()
+	_place_exit_waiters()
+	_waiting_at_exit = false
+	cinematic_active = true
+	_lock_player(true)
 	_tween = create_tween()
 	_tween.tween_interval(0.25)
-	_tween.tween_callback(_grab_yoo)
 	_tween.tween_callback(func(): boss.running = true)
 	if int(design.number) == 9:
-		_caption.text = "Yoo breaks free. Delivery complete!"
 		_tween.tween_interval(0.25)
 		_tween.tween_callback(func():
 			yoo.reparent(self)
@@ -166,35 +188,5 @@ func _process(delta: float) -> void:
 	if _hud_clock < 0.1:
 		return
 	_hud_clock = 0.0
-	var progress := clampf((_player.position.x-float(design.spawn_x)*32.0)/((float(design.goal_x)-float(design.spawn_x))*32.0),0.0,1.0)
-	var dash_ready: bool = _player._dash_available and _player._dash_cooldown_timer <= 0.0
-	if dash_ready:
-		_dash_status.text = "AIR DASH / READY"
-		_dash_status.modulate = Color("73d6bd")
-	elif not _player._dash_available:
-		_dash_status.text = "AIR DASH / LAND TO RECHARGE"
-		_dash_status.modulate = Color("a5b5c9")
-	else:
-		_dash_status.text = "AIR DASH / %.1fs" % _player._dash_cooldown_timer
-		_dash_status.modulate = Color("ffda86")
-	_status.text = "%s   /   %05.1fs   /   ROUTE %02d%%" % [design.subtitle,_level.elapsed_time,int(progress*100.0)]
-	if int(design.number) != 1 or cinematic_active:
-		return
-	var x := _player.position.x / 32.0
-	_hint.text = "A / D: change direction. You keep running after release."
-	for beat in design.beats:
-		if x >= float(beat.x)-7.0 and x <= float(beat.x)+12.0 and absf(_player.position.y-float(beat.floor)*32.0) < 110.0:
-			var kind: String = beat.kind
-			if kind == "dash_practice":
-				_hint.text = "Safe practice: jump, then tap S / B to dash. Land to recharge."
-			elif kind.begins_with("tunnel"):
-				_hint.text = "Hold S / B to fold under the roof. Release after clearing it."
-			elif kind.begins_with("pit"):
-				_hint.text = "Hold SPACE / X to jump. Tap S / B in the air to dash once."
-			else:
-				_hint.text = "Jump onto the steps. Safe landings let you try again."
-			break
-	for tower in design.towers:
-		if x > float(tower.left)-5.0 and x < float(tower.right)+2.0 and _player.position.y > float(tower.top)*32.0-64.0:
-			_hint.text = "Jump at each wall to climb. Keep alternating; steer RIGHT at the top."
-			break
+	var seconds: float = _level.elapsed_time
+	_timer.text = "%02d:%04.1f" % [int(seconds / 60.0),fmod(seconds,60.0)]

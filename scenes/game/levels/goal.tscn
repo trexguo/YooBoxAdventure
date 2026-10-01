@@ -1,17 +1,24 @@
-[gd_scene format=3 uid="uid://c0goal7x2vqpe"]
+[gd_scene load_steps=4 format=3 uid="uid://c0goal7x2vqpe"]
 
 [ext_resource type="Texture2D" path="res://assets/placeholder/goal.png" id="1_goaltex"]
 
+[ext_resource type="Script" path="res://scenes/game/levels/goal_visual.gd" id="2_visual"]
+
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_goal"]
-size = Vector2(32, 32)
+size = Vector2(32, 128)
 
 [node name="Goal" type="Area2D"]
 collision_layer = 0
 collision_mask = 2
 monitoring = true
 
+[node name="ExitFrame" type="Node2D" parent="."]
+script = ExtResource("2_visual")
+
 [node name="Sprite2D" type="Sprite2D" parent="."]
+position = Vector2(25, -120)
 texture = ExtResource("1_goaltex")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+position = Vector2(0, -48)
 shape = SubResource("RectangleShape2D_goal")

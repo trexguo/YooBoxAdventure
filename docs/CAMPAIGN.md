@@ -32,14 +32,24 @@ There is no timed exit lock or forced wait to pad the level duration.
 Each generated scene instances `scenes/game/story/escape_director.tscn`. On
 entry ZhangAss approaches Yoo, grabs her, and leaves with her using his jetpack.
 The player is held in place and the run timer remains stopped until the intro
-finishes. Enter or the Skip button skips the intro. Deaths do not replay it.
+finishes. Enter skips the intro. Deaths do not replay it.
 
-At the goal the run time is recorded and player control is held while the boss
-escapes again. Completion is emitted after the short outro. In stage nine Yoo
+After the intro, ZhangAss already waits beyond the exit holding Yoo. The pair
+remain visible while approaching and throughout retries. At the goal the run
+time is recorded and player control is held while the boss escapes from his
+waiting position. The four-tile-tall exit bay detects airborne crossings; its
+flag is only a visual marker. Completion is emitted after the short outro. In stage nine Yoo
 breaks free and joins the hero before the existing final-game flow continues.
 
-The HUD shows the chapter, current attempt time, horizontal route progress and air dash readiness (ready, land to recharge, or cooldown seconds). Death resets the attempt clock and snaps the camera to spawn, while `total_play_time` keeps cumulative active play. Best times use the successful attempt. Stage one changes
-its tutorial hint according to the nearby obstacle. Signs mark safe dash practice, jump, crouch, shelf and wall-jump sections. Arrows inside shafts point upward; exits indicate where to steer right. Warehouse backgrounds are static vector drawings.
+The HUD keeps only a transparent timer at the top center and a pause icon at the top left. Pausing freezes the attempt clock. Death resets the attempt clock and snaps the camera to spawn, while `total_play_time` keeps cumulative active play. Best times use the successful attempt. Signs mark safe dash practice, jump, crouch, shelf and wall-jump sections. Arrows inside shafts point upward; exits indicate where to steer right. Warehouse backgrounds are static vector drawings.
+
+## Screen controls
+
+Click with the left mouse button or press the touchscreen to jump. Hold to jump higher; release to shorten the jump. A quick tap also jumps. Drag/swipe downward at least 48 viewport pixels to crouch, then keep pressing to stay crouched; release to stand when there is headroom. In the air the same swipe starts the existing air dash, respecting its cooldown and one-dash-per-airtime limit.
+
+Swipe left or right at least 32 viewport pixels to select the running direction. Releasing the gesture keeps the new direction. Horizontal swipes do not crouch or spend an air dash. Mouse drags support the same gestures.
+
+A held press uses an 80ms gesture recognition window so a quick downward swipe can crouch without an accidental jump. Only the first finger owns the gesture. UI touches, cancelled touches, paused gameplay and cinematics do not start jumps. Pausing, losing window focus, dying and respawning clear held gestures. Keyboard and controller inputs remain available alongside screen controls.
 
 ## Authoring and verification
 

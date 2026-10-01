@@ -1,11 +1,13 @@
 @tool
 extends Node2D
-## Small, code-drawn mascot: stable silhouette, feet anchored at local y=0.
+## Square paper box, resting on its bottom edge at local y=0.
 var flip_h := false
 var pose := "idle"
 var crouched := false
 var _height := 35.0
-var _clock := 0.0
+var _motion_ratio := 0.0
+var _lean := 0.0
+const HALF_WIDTH := 17.5
 var _death_time := 0.0
 const INK := Color("302536")
 const CARD := Color("edaa52")
@@ -17,7 +19,8 @@ func reset() -> void:
 	crouched = false
 	_height = 35.0
 	_death_time = 0.0
-	_clock = 0.0
+	_motion_ratio = 0.0
+	_lean = 0.0
 	queue_redraw()
 
 func set_pose(value: String, is_crouched: bool) -> void:
@@ -26,8 +29,23 @@ func set_pose(value: String, is_crouched: bool) -> void:
 	pose = value
 	crouched = is_crouched
 
+## Use actual velocity so a reversal retains its previous lean until momentum
+## changes. Drawing-only shear keeps collision and physics interpolation stable.
+func set_motion(horizontal_speed: float, speed_limit: float = 300.0) -> void:
+	_motion_ratio = clampf(horizontal_speed / maxf(speed_limit, 1.0), -1.0, 1.0)
+
 func _process(delta: float) -> void:
-	_clock += delta
+	var degrees := 4.0
+	if pose == "dash":
+		degrees = 6.0
+	elif crouched:
+		degrees = 2.0
+	elif pose == "jump" or pose == "fall":
+		degrees = 3.0
+	var target := deg_to_rad(degrees) * _motion_ratio
+	if pose == "idle" or pose == "dead" or pose == "wall_slide":
+		target = 0.0
+	_lean = lerpf(_lean, target, 1.0 - exp(-10.0 * delta))
 	_height = move_toward(_height, 16.0 if crouched else 35.0, delta * 160.0)
 	if pose == "dead":
 		_death_time += delta
@@ -40,6 +58,7 @@ func _polygon(points: PackedVector2Array, color: Color) -> void:
 	draw_polyline(outline, INK, 1.6, true)
 
 func _draw() -> void:
+	draw_set_transform(Vector2.ZERO)
 	if pose == "dead" and _death_time > 0.07:
 		var t := _death_time - 0.07
 		for i in range(7):
@@ -55,15 +74,16 @@ func _draw() -> void:
 		var behind := 1.0 if flip_h else -1.0
 		for i in range(3):
 			var y := -10.0 - float(i) * 7.0
-			draw_line(Vector2(behind*18.0,y),Vector2(behind*(29.0+float(i)*5.0),y),Color("ffda86"),1.5,true)
+			draw_line(Vector2(behind*21.0,y),Vector2(behind*(32.0+float(i)*5.0),y),Color("ffda86"),1.5,true)
 	var h := _height
-	var step := sin(_clock * 22.0) * 2.0 if pose == "run" or crouched else 0.0
-	# Only the feet cycle. The box never breathes, bobs, or changes scale.
-	draw_line(Vector2(-7,-4), Vector2(-8 + step,-1.5), INK, 3.0, true)
-	draw_line(Vector2(7,-4), Vector2(8 - step,-1.5), INK, 3.0, true)
-	_polygon(PackedVector2Array([Vector2(-12,-h),Vector2(8,-h),Vector2(12,-h+4),Vector2(12,-5),Vector2(-12,-5)]), CARD)
-	_polygon(PackedVector2Array([Vector2(8,-h),Vector2(12,-h+4),Vector2(12,-5),Vector2(8,-7)]), SHADE)
-	draw_line(Vector2(-10,-h+2),Vector2(7,-h+2),LIGHT,2.0,true)
+	# Shear around the bottom edge: x shifts with height, while every point's
+	# y stays unchanged. Both bottom corners remain planted at y=0.
+	var body_transform := Transform2D(Vector2.RIGHT, Vector2(-tan(_lean), 1.0), Vector2.ZERO)
+	draw_set_transform_matrix(body_transform)
+	_polygon(PackedVector2Array([Vector2(-HALF_WIDTH,-h),Vector2(HALF_WIDTH,-h),Vector2(HALF_WIDTH,0),Vector2(-HALF_WIDTH,0)]), CARD)
+	_polygon(PackedVector2Array([Vector2(HALF_WIDTH-3,-h),Vector2(HALF_WIDTH,-h),Vector2(HALF_WIDTH,0),Vector2(HALF_WIDTH-3,0)]), SHADE)
+
+	draw_line(Vector2(-HALF_WIDTH+2,-h+2),Vector2(HALF_WIDTH-4,-h+2),LIGHT,2.0,true)
 	# Packing tape and folded lid identify the character as a cardboard box.
 	draw_rect(Rect2(-3,-h,5,6 if not crouched else 3),LIGHT)
 	draw_line(Vector2(-0.5,-h),Vector2(-0.5,-h+4),SHADE,1.0)
@@ -84,10 +104,12 @@ func _draw() -> void:
 	draw_style_box(_mouth_style(),Rect2(-6,mouth_y,11,2 if crouched else 5))
 	draw_line(Vector2(-4,mouth_y+1),Vector2(3,mouth_y+1),Color("fff4dc"),1.7,true)
 	# Small shipping-label slash on the cheek.
-	draw_line(Vector2(-9,-8),Vector2(-6,-9),SHADE,1.0,true)
+	draw_line(Vector2(-11,-8),Vector2(-8,-9),SHADE,1.0,true)
 	if crouched:
-		draw_line(Vector2(-12,-h),Vector2(-16,-h+3),INK,2.0,true)
-		draw_line(Vector2(8,-h),Vector2(14,-h+2),INK,2.0,true)
+		draw_line(Vector2(-HALF_WIDTH,-h),Vector2(-HALF_WIDTH-4,-h+3),INK,2.0,true)
+		draw_line(Vector2(HALF_WIDTH-3,-h),Vector2(HALF_WIDTH+3,-h+2),INK,2.0,true)
+
+	draw_set_transform(Vector2.ZERO)
 
 var _mouth: StyleBoxFlat
 func _mouth_style() -> StyleBoxFlat:

@@ -94,6 +94,25 @@ var _dash_direction := 1
 ## Facing chosen when the level starts. 1 is right, -1 is left.
 @export var initial_facing : int = 1
 
+@export_group("Screen Controls")
+## Viewport pixels needed to recognize a downward swipe.
+@export var swipe_down_distance: float = 48.0
+## Short horizontal swipes select the autorun direction.
+@export var swipe_side_distance: float = 32.0
+## Brief recognition window lets a downward swipe crouch without jumping first.
+@export var screen_press_delay: float = 0.08
+var _pointer_id: int = -2 # -2: none; -1: mouse; >= 0: touch index.
+var _pointer_origin := Vector2.ZERO
+var _pointer_age := 0.0
+var _pointer_swiped := false
+var _pointer_crouching := false
+var _pointer_direction_pending: int = 0
+var _pointer_jump_started := false
+var _pointer_jump_pending := false
+var _pointer_crouch_pending := false
+var _pointer_jump_this_tick := false
+var _pointer_crouch_this_tick := false
+
 @export_group("Detection")
 ## Reach of the wall-detection rays, in pixels.
 @export var wall_check_distance : float = 6.0
@@ -185,6 +204,7 @@ func _setup_crouch() -> void:
 ## Returns the player to a position with all momentum cleared.
 ## Called by [Level] when respawning after a death.
 func respawn_at(position_ : Vector2) -> void:
+	_reset_screen_input()
 	global_position = position_
 	velocity = Vector2.ZERO
 	_dash_timer = 0.0
@@ -208,6 +228,7 @@ func respawn_at(position_ : Vector2) -> void:
 func die() -> void:
 	if state == State.DEAD:
 		return
+	_reset_screen_input()
 	_dash_timer = 0.0
 	_set_state(State.DEAD)
 	_update_visual_pose()
@@ -222,7 +243,97 @@ func die() -> void:
 func set_input_enabled(enabled : bool) -> void:
 	_input_enabled = enabled
 	if not enabled:
+		_reset_screen_input()
 		_dash_timer = 0.0
+
+# Screen input stays local: releasing a finger never releases a keyboard key.
+func _reset_screen_input() -> void:
+	_pointer_id = -2
+	_pointer_direction_pending = 0
+	_pointer_jump_pending = false
+	_pointer_crouch_pending = false
+	_pointer_jump_this_tick = false
+	_pointer_crouch_this_tick = false
+	_pointer_swiped = false
+	_pointer_crouching = false
+	_pointer_jump_started = false
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PAUSED or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		_reset_screen_input()
+
+func _screen_input_allowed() -> bool:
+	return _input_enabled and state != State.DEAD and not get_tree().paused
+
+func _over_screen_ui(at: Vector2) -> bool:
+	for control in get_tree().get_nodes_in_group("gameplay_pointer_blocker"):
+		if control is Control and control.is_visible_in_tree() and control.get_global_rect().has_point(at):
+			return true
+	return false
+
+func _begin_screen_press(id: int, at: Vector2) -> void:
+	if _pointer_id != -2 or not _screen_input_allowed() or _over_screen_ui(at):
+		return
+	_pointer_id = id
+	_pointer_origin = at
+	_pointer_age = 0.0
+	_pointer_swiped = false
+	_pointer_crouching = false
+	_pointer_jump_started = false
+
+func _end_screen_press(cancelled: bool = false) -> void:
+	if not cancelled and not _pointer_swiped and not _pointer_jump_started and _screen_input_allowed():
+		_pointer_jump_pending = true
+	_pointer_id = -2
+	_pointer_jump_started = false
+
+func _drag_screen_press(at: Vector2) -> void:
+	if _pointer_swiped or not _screen_input_allowed():
+		return
+	var travel := at - _pointer_origin
+	if absf(travel.x) >= swipe_side_distance and absf(travel.x) > absf(travel.y):
+		_pointer_swiped = true
+		_pointer_jump_pending = false
+		_pointer_jump_started = false
+		_pointer_direction_pending = 1 if travel.x > 0.0 else -1
+	elif travel.y >= swipe_down_distance and travel.y > absf(travel.x):
+		_pointer_swiped = true
+		_pointer_jump_pending = false
+		_pointer_jump_started = false
+		_pointer_crouching = true
+		_pointer_crouch_pending = true
+
+func _input(event: InputEvent) -> void:
+	# GUI emulation can consume screen events. Handle gameplay presses first,
+	# reserving UI hit areas and ignoring synthetic mouse copies of touches.
+	if event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
+	if event is InputEventScreenTouch and event.pressed and not event.canceled:
+		_begin_screen_press(event.index,event.position)
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		_begin_screen_press(-1,event.position)
+	# Owned gestures must release even when the pointer ends over a UI control.
+	if _pointer_id == -2 or event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
+	if event is InputEventScreenTouch and event.index == _pointer_id and (not event.pressed or event.canceled):
+		_end_screen_press(event.canceled)
+	elif event is InputEventScreenDrag and event.index == _pointer_id:
+		_drag_screen_press(event.position)
+	elif _pointer_id == -1 and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_end_screen_press()
+	elif _pointer_id == -1 and event is InputEventMouseMotion:
+		_drag_screen_press(event.position)
+
+func _update_screen_input(delta: float) -> void:
+	if _pointer_id != -2 and not _pointer_swiped and not _pointer_jump_started:
+		_pointer_age += delta
+		if _pointer_age >= screen_press_delay:
+			_pointer_jump_started = true
+			_pointer_jump_pending = true
+	_pointer_jump_this_tick = _pointer_jump_pending
+	_pointer_crouch_this_tick = _pointer_crouch_pending
+	_pointer_jump_pending = false
+	_pointer_crouch_pending = false
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -259,6 +370,9 @@ func _update_facing() -> void:
 	_direction_held = pressed
 	if pressed == 0 and stop_when_no_direction:
 		facing = 0
+	if _input_enabled and _pointer_direction_pending != 0:
+		facing = _pointer_direction_pending
+		_pointer_direction_pending = 0
 
 ## Returns the horizontal direction to move this frame.
 ##
@@ -270,10 +384,10 @@ func _get_move_direction() -> float:
 	return float(facing)
 
 func _is_jump_just_pressed() -> bool:
-	return _input_enabled and Input.is_action_just_pressed(&"jump")
+	return _input_enabled and (Input.is_action_just_pressed(&"jump") or _pointer_jump_this_tick)
 
 func _is_jump_held() -> bool:
-	return _input_enabled and Input.is_action_pressed(&"jump")
+	return _input_enabled and (Input.is_action_pressed(&"jump") or (_pointer_id != -2 and _pointer_jump_started and not _pointer_swiped))
 
 # --- Crouch ------------------------------------------------------------------
 
@@ -302,7 +416,7 @@ func _has_headroom() -> bool:
 
 ## True while the player is holding the crouch button.
 func _is_crouch_held() -> bool:
-	return _input_enabled and Input.is_action_pressed(&"crouch")
+	return _input_enabled and (Input.is_action_pressed(&"crouch") or (_pointer_id != -2 and _pointer_crouching) or _pointer_crouch_this_tick)
 
 ## Swaps the hitbox and animates the feet-anchored box pose.
 ##
@@ -421,6 +535,7 @@ func _update_camera_lead(delta: float) -> void:
 # --- Main loop ---------------------------------------------------------------
 
 func _physics_process(delta : float) -> void:
+	_update_screen_input(delta)
 	_update_camera_lead(delta)
 	if state == State.DEAD:
 		return
@@ -429,7 +544,7 @@ func _physics_process(delta : float) -> void:
 	if is_on_floor() and velocity.y >= 0.0:
 		_dash_available = true
 	_update_facing()
-	if _input_enabled and not is_on_floor() and Input.is_action_just_pressed("crouch") and _dash_available and _dash_cooldown_timer <= 0.0:
+	if _input_enabled and not is_on_floor() and (Input.is_action_just_pressed("crouch") or _pointer_crouch_this_tick) and _dash_available and _dash_cooldown_timer <= 0.0:
 		_dash_available = false
 		_dash_timer = dash_duration
 		_dash_cooldown_timer = dash_cooldown
@@ -529,3 +644,4 @@ func _resolve_state() -> void:
 func _update_visual_pose() -> void:
 	if _sprite != null:
 		_sprite.set_pose(VISUAL_POSES[state], _crouched)
+		_sprite.set_motion(velocity.x, max_speed)

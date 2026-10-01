@@ -86,3 +86,11 @@ func _on_level_buttons_container_item_activated(index : int) -> void:
 	# players re-challenge levels.
 	GameState.set_checkpoint_level_path(level_paths[index])
 	level_selected.emit()
+
+func _on_back_pressed() -> void:
+	hide()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel"):
+		get_viewport().set_input_as_handled()
+		hide()
