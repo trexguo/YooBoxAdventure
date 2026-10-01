@@ -64,29 +64,31 @@ class Grid:
 
 
 def tutorial() -> Grid:
-    """Level 1: five beats, each forcing the verb it teaches.
+    """Level 1: six beats, each forcing the verb it teaches.
 
-    The level is a dead end. The player runs right along a floor, clears a spike
-    pit, meets a pillar too tall to jump, and finds the floor stops at a shaft.
-    The shaft's only opening is the doorway at floor level; it is roofed over and
-    the goal sits at the top of it. The only way up is alternating wall jumps
-    between its two facing walls.
+    The level is a dead end. The player runs right along a floor, slides under a
+    low ceiling they cannot walk through, clears a spike pit, meets a pillar too
+    tall to jump, and finds the floor stops at a shaft. The shaft's only opening
+    is the doorway at floor level; it is roofed over and the goal sits at the top
+    of it. The only way up is alternating wall jumps between its two facing walls.
 
     Every dimension is derived from the measured movement envelope in
     tools/verify_level_geometry.py, not by eye:
 
-      full jump height  ~1.8 tiles   -> never step up more than 1 tile
-      run jump range    ~3.7 tiles   -> never leave a gap wider than 3 tiles
+      full jump height  ~2.3 tiles   -> never step up more than 2 tiles
+      run jump range    ~5.0 tiles   -> never leave a gap wider than 4 tiles
       wall jump gain    ~1.7 tiles   per jump in a 3-tile shaft
                         (a 4-tile shaft drops to 1.0, a 5-tile shaft is
                          impossible, so the shaft is 3 tiles wide)
+      slide            ~0.4 s        -> clears a 2-tile tunnel with room to spare
 
     Beats, left to right:
       1. run and a small hop        floor, then a 1-tile step
-      2. jump across a spike pit    a 2-tile gap over spikes
-      3. a pillar too tall to jump  3 tiles high, so it forces a wall jump
-      4. drop into the shaft        the floor ends at the shaft doorway
-      5. climb out                  ~2.4 wall jumps up to the goal
+      2. slide under a low ceiling  2 tiles of 1-tile-high tunnel
+      3. jump across a spike pit    a 2-tile gap over spikes
+      4. a pillar too tall to jump  3 tiles high, so it forces a wall jump
+      5. drop into the shaft        the floor ends at the shaft doorway
+      6. climb out                  ~2.4 wall jumps up to the goal
     """
     g = Grid()
     g.border()
@@ -97,17 +99,35 @@ def tutorial() -> Grid:
     # Beat 1: a 1-tile step, to establish that jumping is available.
     g.rect(4, 16, 8, 16)
 
-    # Beat 2: a 2-tile spike pit. Spikes sit on the floor row, so the gap is
+    # Beat 2: a low tunnel, the slide's teaching beat.
+    #
+    # A solid mass from the ceiling down to row 15, with row 16 left open: the
+    # player walks along row 16, so the clearance under the roof is one 32px
+    # tile. That is under the standing body's 36px, so they physically cannot
+    # walk in: they hit the ceiling and must slide. (Putting the roof at row 16
+    # instead would fill the player's own row and make a 2-tile wall, not a
+    # tunnel.)
+    #
+    # 2 tiles wide (64px) is deliberate: a slide covers ~102px in its 0.40s, so
+    # 2 tiles leaves ~38px of slack, while 3 tiles (96px) would leave only ~6px
+    # and read as a timing test rather than a lesson.
+    #
+    # The tunnel is placed before the spike pit so the slide is learned somewhere
+    # a mistimed attempt is harmless: stopping inside simply means standing up is
+    # blocked and the player walks on and out the far end.
+    g.rect(11, 1, 12, 15)
+
+    # Beat 3: a 2-tile spike pit. Spikes sit on the floor row, so the gap is
     # clearable with a run jump and lethal if walked into.
-    for x in range(13, 15):
+    for x in range(16, 18):
         g.put(x, 17, SPIKE)
 
-    # Beat 3: a pillar 3 tiles tall. A jump reaches under 2 tiles, so hopping it
-    # is impossible and the only way past is wall sliding on its face and wall
+    # Beat 4: a pillar 3 tiles tall. A jump reaches under 2.3 tiles, so hopping
+    # it is impossible and the only way past is wall sliding on its face and wall
     # jumping off it. This is where the level stops being a walk.
-    g.rect(19, 14, 19, 16, SOLID)
+    g.rect(22, 14, 22, 16, SOLID)
 
-    # Beats 4 and 5: the shaft, which is the wall-jump climb.
+    # Beats 5 and 6: the shaft, which is the wall-jump climb.
     #
     # The shaft interior is 3 tiles wide. Widths were measured, not guessed:
     #
@@ -126,13 +146,13 @@ def tutorial() -> Grid:
     # doorway at floor level has no chance to react, so spiking the floor would
     # be an unfair instant death rather than difficulty. Missing a wall jump
     # drops them back to the floor and they try again.
-    g.rect(31, 1, 31, 17, SOLID)
-    g.rect(35, 1, 35, 17, SOLID)
-    g.rect(31, 8, 35, 8, SOLID)           # roof, so the goal must be jumped to
-    g.rect(32, 9, 34, 16, EMPTY)          # the interior to climb
-    g.rect(31, 16, 31, 16, EMPTY)         # doorway in, at floor level
+    g.rect(34, 1, 34, 17, SOLID)
+    g.rect(38, 1, 38, 17, SOLID)
+    g.rect(34, 8, 38, 8, SOLID)           # roof, so the goal must be jumped to
+    g.rect(35, 9, 37, 16, EMPTY)          # the interior to climb
+    g.rect(34, 16, 34, 16, EMPTY)         # doorway in, at floor level
 
-    g.put(33, 12, GOAL)
+    g.put(36, 12, GOAL)
     g.put(5, 15, SPAWN)
     return g
 

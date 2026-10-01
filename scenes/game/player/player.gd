@@ -11,14 +11,16 @@ extends CharacterBody2D
 ## - [b]Wall slide + wall jump[/b]: the core traversal verb. Wall jumps lock out
 ##   horizontal input briefly so the player cannot steer straight back into the
 ##   wall, and alternate facing so chaining walls is possible.
+## - [b]Slide[/b]: holding the slide button drops the player into a short
+##   hitbox so they can pass under one-tile gaps without slowing down.
 ##
 ## Every tunable is exported so the feel can be dialled in from the inspector
 ## while the game is running.
 
-enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, DEAD }
+enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, CROUCH, DEAD }
 
 ## Horizontal speed cap while running, in pixels per second.
-@export var max_speed : float = 190.0
+@export var max_speed : float = 230.0
 ## Ground acceleration. Higher is snappier.
 @export var ground_acceleration : float = 1400.0
 ## Ground friction applied when no direction is held.
@@ -30,7 +32,7 @@ enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, DEAD }
 
 @export_group("Jump")
 ## Upward velocity applied on a ground jump.
-@export var jump_velocity : float = 360.0
+@export var jump_velocity : float = 400.0
 ## Multiplier applied to remaining upward velocity when jump is released early.
 @export_range(0.0, 1.0) var jump_cut_multiplier : float = 0.45
 ## Gravity applied while rising and the jump button is held.
@@ -57,6 +59,10 @@ enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, DEAD }
 @export var wall_jump_lockout : float = 0.16
 ## If true, the player slides down walls without holding into them.
 @export var auto_wall_slide : bool = false
+
+@export_group("Crouch")
+## Collision layer to test for headroom when the player straightens up.
+@export_flags_2d_physics var headroom_mask : int = 1
 
 @export_group("Control Scheme")
 ## If true, the player always runs: pressing a direction key sets which way they
@@ -101,6 +107,9 @@ var _wall_direction : int = 0
 var _wall_jump_origin_direction : int = 0
 ## External control lock, e.g. during a level transition.
 var _input_enabled : bool = true
+## True while the short hitbox is active. Tracks the shape swap directly, so
+## code (and tests) can read it without waiting for the deferred swap to apply.
+var _crouched : bool = false
 
 ## Which way the player is heading: 1 right, -1 left.
 ##
@@ -115,6 +124,16 @@ var _direction_held : int = 0
 @onready var _wall_check_left : RayCast2D = $WallCheckLeft
 @onready var _wall_check_right : RayCast2D = $WallCheckRight
 @onready var _sprite : Sprite2D = $Sprite2D
+@onready var _stand_shape : CollisionShape2D = $CollisionShape2D
+@onready var _crouch_shape : CollisionShape2D = $CrouchCollisionShape2D
+
+## Vertical offset applied to the sprite while crouched, so the shorter body sits
+## on the floor rather than floating. Half the difference in body height.
+var _sprite_crouch_offset : float = 0.0
+
+## A zero-size shape used to probe the space the standing body would occupy.
+var _headroom_shape := RectangleShape2D.new()
+var _headroom_query := PhysicsShapeQueryParameters2D.new()
 
 func _set_state(new_state : State) -> void:
 	if state == new_state:
@@ -126,6 +145,32 @@ func _ready() -> void:
 	add_to_group(&"player")
 	GameState.mark_level_reached(scene_file_path)
 	facing = -1 if initial_facing < 0 else 1
+	_setup_crouch()
+
+## Prepares the crouch geometry and the reusable headroom probe.
+##
+## The headroom probe is not the standing capsule: the standing body always
+## overlaps the floor it is standing on, so testing it would report "blocked"
+## forever and the player could never get up. It is instead the slab of space
+## the standing body needs [i]above[/i] the crouched one, which is empty exactly
+## when standing up is safe.
+func _setup_crouch() -> void:
+	var stand := _stand_shape.shape as CapsuleShape2D
+	var crouch := _crouch_shape.shape as CapsuleShape2D
+	if stand == null or crouch == null:
+		return
+	var extra : float = stand.height - crouch.height
+	_sprite_crouch_offset = extra * 0.5
+	# The slab spans from the top of the crouched body upward by the difference
+	# in height, centred on the player's feet (y = 0 is the feet under both
+	# shapes, which are bottom-anchored).
+	_headroom_shape.size = Vector2(stand.radius * 2.0, extra)
+	_headroom_query.shape = _headroom_shape
+	_headroom_query.collision_mask = headroom_mask
+	_headroom_query.collide_with_areas = false
+	_headroom_query.collide_with_bodies = true
+	# Never let the player's own body count as blocking itself.
+	_headroom_query.exclude = [get_rid()]
 
 # --- Public API --------------------------------------------------------------
 
@@ -140,6 +185,7 @@ func respawn_at(position_ : Vector2) -> void:
 	_time_since_grounded = 0.0
 	_input_enabled = true
 	_direction_held = 0
+	_set_body_crouched(false)
 	# Restart facing the level's default way, so a respawn is consistent.
 	facing = -1 if initial_facing < 0 else 1
 	_set_state(State.FALL)
@@ -211,6 +257,63 @@ func _is_jump_just_pressed() -> bool:
 func _is_jump_held() -> bool:
 	return _input_enabled and Input.is_action_pressed(&"jump")
 
+# --- Crouch ------------------------------------------------------------------
+
+## True when there is room for the standing body above the crouched one.
+##
+## False while under a low ceiling, which is what keeps the player down: the
+## slide simply continues until they clear the gap.
+##
+## Both shapes are bottom-anchored at the feet (y = 0), so the space standing up
+## needs is the band from the crouched body's top up to the standing body's top.
+## Testing the whole standing capsule instead would always overlap the floor the
+## player is standing on, and they could never get up at all.
+func _has_headroom() -> bool:
+	var stand := _stand_shape.shape as CapsuleShape2D
+	var crouch := _crouch_shape.shape as CapsuleShape2D
+	if stand == null or crouch == null:
+		# Shape missing (scene edited without the crouch node); stand up rather
+		# than trapping the player in a permanent slide.
+		return true
+	var extra : float = stand.height - crouch.height
+	# Centre of the required band, measured up from the feet.
+	var band_center : float = -crouch.height - extra * 0.5
+	_headroom_query.transform = Transform2D(0.0, global_position + Vector2(0.0, band_center))
+	var hit := get_world_2d().direct_space_state.intersect_shape(_headroom_query, 1)
+	return hit.is_empty()
+
+## True while the player is holding the crouch button.
+func _is_crouch_held() -> bool:
+	return _input_enabled and Input.is_action_pressed(&"crouch")
+
+## Swaps which hitbox is active and shifts the sprite to match.
+##
+## Both shapes are bottom-anchored at the feet, so this never moves the player:
+## the shorter body simply occupies the lower part of the space the tall one did.
+func _set_body_crouched(crouched : bool) -> void:
+	if _crouched == crouched:
+		return
+	_crouched = crouched
+	if _stand_shape == null or _crouch_shape == null:
+		return
+	_stand_shape.set_deferred(&"disabled", crouched)
+	_crouch_shape.set_deferred(&"disabled", not crouched)
+	_sprite.position.y = _sprite_crouch_offset if crouched else 0.0
+
+## Keeps the hitbox in sync with the crouch button and the ceiling.
+##
+## Holding the button crouches. Releasing it stands back up, except under a low
+## ceiling, where the player stays down until they have run clear: the short
+## hitbox is what makes a one-tile tunnel passable, so standing up inside one
+## would drive the tall body into the roof.
+func _update_crouch() -> void:
+	if not is_on_floor():
+		# Airborne, the body stays as it is: a crouch that leaves a ledge keeps
+		# the short hitbox for the whole fall, so the arc under a ceiling clears.
+		return
+	var wants_crouch := _is_crouch_held() or not _has_headroom()
+	_set_body_crouched(wants_crouch)
+
 ## Detects a wall on either side, excluding walls only a pixel tall so the
 ## player can still stand on the lip of a ledge.
 func _update_wall_direction() -> void:
@@ -251,6 +354,8 @@ func _apply_horizontal_movement(delta : float) -> void:
 	if _wall_jump_lockout_timer > 0.0 and direction == float(_wall_jump_origin_direction):
 		direction = 0.0
 	var on_ground := is_on_floor()
+	# Crouching changes the hitbox only, never the speed: the player keeps running
+	# at [member max_speed] so a low tunnel is a gap to thread, not a timing test.
 	if not is_zero_approx(direction):
 		var acceleration := ground_acceleration if on_ground else air_acceleration
 		if toggle_direction_control:
@@ -312,15 +417,23 @@ func _physics_process(delta : float) -> void:
 
 	_update_facing()
 	_update_wall_direction()
+	_update_crouch()
 
 	var can_ground_jump := is_on_floor() or _time_since_grounded <= coyote_time
 	var has_buffered_jump := _jump_buffer_timer > 0.0
 
 	var jumped_this_frame := false
-	if has_buffered_jump and _wall_direction != 0 and not is_on_floor():
+	# Jumping stands the player up first, but only when there is room: jumping
+	# from inside a low tunnel would drive the tall body straight into the
+	# ceiling. The buffered jump stays banked and fires once the player clears it.
+	if has_buffered_jump and not _crouched and _wall_direction != 0 and not is_on_floor():
 		_do_wall_jump()
 		jumped_this_frame = true
-	elif has_buffered_jump and can_ground_jump:
+	elif has_buffered_jump and can_ground_jump and not _crouched:
+		_do_jump(-jump_velocity)
+		jumped_this_frame = true
+	elif has_buffered_jump and _crouched and _has_headroom():
+		_set_body_crouched(false)
 		_do_jump(-jump_velocity)
 		jumped_this_frame = true
 
@@ -342,14 +455,18 @@ func _physics_process(delta : float) -> void:
 		velocity.y = minf(velocity.y, wall_slide_speed)
 
 	move_and_slide()
-
 	_resolve_state()
 
 func _resolve_state() -> void:
 	if _can_wall_slide():
 		_set_state(State.WALL_SLIDE)
 	elif is_on_floor():
-		_set_state(State.IDLE if is_zero_approx(_get_move_direction()) else State.RUN)
+		if _crouched:
+			# Crouching still counts as running: the state is only used for
+			# animation, and the player is moving at full speed.
+			_set_state(State.CROUCH)
+		else:
+			_set_state(State.IDLE if is_zero_approx(_get_move_direction()) else State.RUN)
 	elif velocity.y < 0.0:
 		_set_state(State.JUMP)
 	else:

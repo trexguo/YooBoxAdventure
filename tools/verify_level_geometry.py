@@ -15,8 +15,8 @@ skippable. Keep the constants below in sync with player.gd.
 from __future__ import annotations
 
 # --- Mirror of player.gd's exported tuning -----------------------------------
-MAX_SPEED = 190.0
-JUMP_VELOCITY = 360.0
+MAX_SPEED = 230.0
+JUMP_VELOCITY = 400.0
 RISE_GRAVITY = 1050.0
 FALL_GRAVITY = 1500.0
 MAX_FALL_SPEED = 620.0
@@ -25,6 +25,10 @@ WALL_JUMP_PUSH = 250.0
 WALL_JUMP_VELOCITY = 355.0
 WALL_JUMP_LOCKOUT = 0.16
 COYOTE_TIME = 0.10
+# Body heights, from the two capsules in player.tscn. Crouching swaps between
+# them; it does not change speed, so there is no crouch duration to mirror.
+STAND_HEIGHT = 36.0
+CROUCH_HEIGHT = 20.0
 
 TILE = 32
 DT = 1.0 / 60.0
@@ -38,10 +42,13 @@ MAX_STEPS = 100_000
 # player time to react to a hazard they did not choose to approach, because
 # they arrive at full speed with no way to stop except turning around.
 #
-# At 190 px/s a player covers ~3 tiles per 0.5 s, and the shortest human
+# At 230 px/s a player covers ~3.6 tiles per 0.5 s, and the shortest human
 # reaction-plus-settle is around 0.4 s. A level whose first hazard is closer
 # than this to the spawn is unfair, not hard.
 AUTO_RUN_REACTION_MARGIN = 0.6   # seconds of clear running before the first hazard
+# A low tunnel this long (in seconds of running) reads as a deliberate obstacle
+# rather than an invisible blip the player runs past without noticing.
+MIN_TUNNEL_SECONDS = 0.20
 
 
 def jump_height() -> float:
@@ -121,6 +128,16 @@ def wall_jump_crossing_time(shaft_width_px: float) -> float:
     raise RuntimeError("wall_jump_crossing_time did not reach the far wall")
 
 
+def crouch_run_seconds(tiles : float) -> float:
+    """Seconds to run `tiles` tiles while crouched.
+
+    Crouching does not change horizontal speed (see _update_crouch in player.gd),
+    so this is the same as running: the tunnel is a gap to thread, not a timing
+    test.
+    """
+    return (tiles * TILE) / MAX_SPEED
+
+
 def main() -> int:
     height = jump_height()
     distance, airtime = run_jump_range()
@@ -148,10 +165,11 @@ def main() -> int:
     FLOOR_ROW = 17
     SPAWN_COL = 5
     STEP_ROW, STEP_COL0, STEP_COL1 = 16, 4, 8
-    PIT_COL0, PIT_COL1 = 13, 14
-    PILLAR_COL, PILLAR_TOP_ROW = 19, 14
-    WALL_LEFT_COL, WALL_RIGHT_COL = 31, 35
-    GOAL_ROW, GOAL_COL = 12, 33
+    TUNNEL_ROOF_ROW, TUNNEL_COL0, TUNNEL_COL1 = 15, 11, 12
+    PIT_COL0, PIT_COL1 = 16, 17
+    PILLAR_COL, PILLAR_TOP_ROW = 22, 14
+    WALL_LEFT_COL, WALL_RIGHT_COL = 34, 38
+    GOAL_ROW, GOAL_COL = 12, 36
     SHAFT_ROOF_ROW = 8
 
     shaft_width_tiles = WALL_RIGHT_COL - WALL_LEFT_COL - 1
@@ -197,6 +215,23 @@ def main() -> int:
     # The shaft must be a real dead end (roofed) so the climb is mandatory.
     if SHAFT_ROOF_ROW >= GOAL_ROW:
         problems.append("the shaft is not roofed above the goal, so the climb can be skipped")
+
+    # The tunnel must be passable while sliding but not while standing. Clearance
+    # is the gap between the roof and the floor row beneath it.
+    tunnel_clearance = (FLOOR_ROW - TUNNEL_ROOF_ROW - 1) * TILE
+    if tunnel_clearance <= 0:
+        problems.append("the low tunnel has no clearance to slide through")
+    # The standing body must NOT fit, or the slide is never needed...
+    if tunnel_clearance >= STAND_HEIGHT:
+        problems.append(
+            f"the tunnel clearance is {tunnel_clearance:.0f}px and the standing body "
+            f"is {STAND_HEIGHT:.0f}px, so the player could simply walk through it")
+    # ...and the crouched body must, or the tunnel is impassable.
+    if tunnel_clearance < CROUCH_HEIGHT:
+        problems.append(
+            f"the tunnel clearance is {tunnel_clearance:.0f}px but the crouched body "
+            f"is {CROUCH_HEIGHT:.0f}px tall, so even crouching the player cannot fit")
+    tunnel_width = (TUNNEL_COL1 - TUNNEL_COL0 + 1) * TILE
 
     # Under toggle control the player leaves the spawn already running at full
     # speed, so the first hazard needs enough clear ground to be seen coming.
@@ -251,6 +286,20 @@ def main() -> int:
             True,
             "the shaft floor carries no spikes, so a player who steps through the "
             "doorway lands safely and simply tries the climb again",
+        ),
+        (
+            "the low tunnel teaches the crouch",
+            TUNNEL_ROOF_ROW < FLOOR_ROW and CROUCH_HEIGHT <= tunnel_clearance < STAND_HEIGHT,
+            f"clearance {tunnel_clearance:.0f}px blocks the {STAND_HEIGHT:.0f}px standing "
+            f"body but admits the {CROUCH_HEIGHT:.0f}px crouched one",
+        ),
+        (
+            "the crouch crossing is not a timing test",
+            crouch_run_seconds(TUNNEL_COL1 - TUNNEL_COL0 + 1) >= MIN_TUNNEL_SECONDS,
+            f"the {tunnel_width:.0f}px tunnel takes "
+            f"{crouch_run_seconds(TUNNEL_COL1 - TUNNEL_COL0 + 1):.2f}s to cross at running "
+            f"speed; crouching has no timer, so a tunnel at least {MIN_TUNNEL_SECONDS:.2f}s "
+            "long is a deliberate obstacle rather than an invisible blip",
         ),
         (
             "there is runway before the first hazard",

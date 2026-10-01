@@ -21,6 +21,10 @@ func _run_suite() -> void:
 	await _test_tap_does_not_flip()
 	await _test_hold_to_move_mode()
 	await _test_wall_jump_turns_away()
+	await _test_crouch_enters_low_tunnel()
+	await _test_crouch_keeps_full_speed()
+	await _test_cannot_stand_under_ceiling()
+	await _test_stands_up_after_clearing_ceiling()
 
 # --- World helpers -----------------------------------------------------------
 
@@ -60,7 +64,7 @@ func _step(frames : int) -> void:
 		await get_tree().physics_frame
 
 func _release_all() -> void:
-	for action in ["move_left", "move_right", "jump"]:
+	for action in ["move_left", "move_right", "jump", "crouch"]:
 		if Input.is_action_pressed(action):
 			Input.action_release(action)
 
@@ -168,6 +172,128 @@ func _test_wall_jump_turns_away() -> void:
 	_expect("the player does not steer straight back into the wall",
 		player.global_position.x < 12 * 32 - 20,
 		"x=%.1f, expected to have moved left of the start" % player.global_position.x)
+	_release_all()
+	world[0].free()
+
+# --- Slide -------------------------------------------------------------------
+
+## Builds a floor with a ceiling slab `gap_tiles` above it, spanning `ceiling_x0`
+## to `ceiling_x1` (inclusive tiles). Returns [host, player, ceiling_top_y].
+func _make_tunnel_world(ceiling_x0 : int, ceiling_x1 : int, gap_tiles : float) -> Array:
+	var host := Node2D.new()
+	add_child(host)
+
+	var body := StaticBody2D.new()
+	body.collision_layer = SOLID
+	body.collision_mask = 0
+	host.add_child(body)
+
+	# Floor: top surface at y=0.
+	var floor_shape := RectangleShape2D.new()
+	floor_shape.size = Vector2(2000, 64)
+	var floor_col := CollisionShape2D.new()
+	floor_col.shape = floor_shape
+	floor_col.position = Vector2(1000, 32)
+	body.add_child(floor_col)
+
+	# Ceiling slab: bottom surface `gap_tiles * 32` above the floor.
+	var gap := gap_tiles * 32.0
+	var width := (ceiling_x1 - ceiling_x0 + 1) * 32.0
+	var ceil_shape := RectangleShape2D.new()
+	ceil_shape.size = Vector2(width, 200)
+	var ceil_col := CollisionShape2D.new()
+	ceil_col.shape = ceil_shape
+	ceil_col.position = Vector2(ceiling_x0 * 32.0 + width * 0.5, -gap - 100.0)
+	body.add_child(ceil_col)
+
+	var player = load(PLAYER_SCENE).instantiate()
+	host.add_child(player)
+	player.toggle_direction_control = true
+	player.facing = 1
+	player._direction_held = 0
+	player.global_position = Vector2(ceiling_x0 * 32.0 - 120, -40)
+	return [host, player]
+
+func _is_crouched(player) -> bool:
+	return player._crouched
+
+func _test_crouch_enters_low_tunnel() -> void:
+	# Ceiling 1 tile above the floor, from tile 4 to tile 6: the standing body
+	# cannot pass, the crouched one can. The key must be held for the whole
+	# crossing, since crouching is hold-to-crouch, not a timed slide.
+	var world := _make_tunnel_world(4, 6, 1.0)
+	var player = world[1]
+	await _step(30)
+	var start_x : float = player.global_position.x
+
+	Input.action_press("crouch")
+	await _step(60)
+	Input.action_release("crouch")
+	await _step(5)
+
+	# The player should be past the far edge of the ceiling (tile 7 onward).
+	var past_ceiling : bool = player.global_position.x > 7 * 32.0
+	_expect("holding crouch carries the player under a one-tile ceiling",
+		past_ceiling,
+		"x=%.1f; expected to be past %.1f" % [player.global_position.x, 7 * 32.0])
+	var travelled : float = player.global_position.x - start_x
+	_expect("the crouched player kept moving",
+		travelled > 64.0,
+		"travelled %.1fpx; expected to clear the 3-tile ceiling" % travelled)
+	_release_all()
+	world[0].free()
+
+func _test_crouch_keeps_full_speed() -> void:
+	# Crouching changes the hitbox only. In open ground, the horizontal speed
+	# while crouched must match the speed while running: no slowdown, no lunge.
+	var world := _make_tunnel_world(4, 4, 8.0)   # ceiling high enough to stand
+	var player = world[1]
+	await _step(50)
+	var running_speed : float = absf(player.velocity.x)
+
+	Input.action_press("crouch")
+	await _step(30)
+	var crouched_speed : float = absf(player.velocity.x)
+	_expect("crouching does not slow the player down",
+		is_equal_approx(crouched_speed, running_speed) or crouched_speed + 1.0 >= running_speed,
+		"running %.1f px/s vs crouched %.1f px/s" % [running_speed, crouched_speed])
+	_release_all()
+	world[0].free()
+
+func _test_cannot_stand_under_ceiling() -> void:
+	# Long ceiling (tiles 4..20). Releasing crouch under it must NOT stand the
+	# player up: the tall capsule would be driven into the ceiling. The short
+	# hitbox has to persist until they have run clear.
+	var world := _make_tunnel_world(4, 20, 1.0)
+	var player = world[1]
+	await _step(30)
+
+	Input.action_press("crouch")
+	await _step(10)
+	Input.action_release("crouch")
+	await _step(20)
+
+	var under_ceiling : bool = player.global_position.x < 20 * 32.0
+	_expect("the crouched body is held after release while under a ceiling",
+		under_ceiling and _is_crouched(player),
+		"x=%.1f crouched=%s; expected to still be crouched under the ceiling"
+			% [player.global_position.x, _is_crouched(player)])
+	_release_all()
+	world[0].free()
+
+func _test_stands_up_after_clearing_ceiling() -> void:
+	var world := _make_tunnel_world(4, 6, 1.0)
+	var player = world[1]
+	await _step(30)
+
+	Input.action_press("crouch")
+	await _step(60)
+	Input.action_release("crouch")
+	await _step(10)
+
+	_expect("the player stands back up after clearing the ceiling",
+		not _is_crouched(player),
+		"still crouched at x=%.1f after passing the ceiling" % player.global_position.x)
 	_release_all()
 	world[0].free()
 

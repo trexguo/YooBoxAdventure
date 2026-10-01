@@ -48,7 +48,7 @@ $GODOT --headless --path . --script res://tools/smoke_test_levels.gd
 $GODOT --headless --path . --script res://tools/test_progression.gd
 ```
 
-`tools/measure_jump_arc.gd` measures the real jump arc by running the actual scene headless. `verify_level_geometry.py` mirrors the same physics in Python, which is much faster; when a number looks wrong, run the measurement and compare. (They should agree: 1.84 tiles held, 3.86 tiles range.)
+`tools/measure_jump_arc.gd` measures the real jump arc by running the actual scene headless. `verify_level_geometry.py` mirrors the same physics in Python, which is much faster; when a number looks wrong, run the measurement and compare. (They should agree: 2.28 tiles held, 5.03 tiles range.)
 
 Level scenes are **generated** — see "Level authoring" below. Regenerating and re-verifying is the normal loop:
 
@@ -118,14 +118,18 @@ Tiles are **32×32**. Level 1 is a real tutorial; levels 2–9 are runnable skel
 
 ### Player (`scenes/game/player/`)
 
-`CharacterBody2D` with a state enum (IDLE/RUN/JUMP/FALL/WALL_SLIDE/DEAD) and the forgiveness mechanics that make a precision platformer feel fair: variable jump height, coyote time, jump buffering, wall slide, and wall jump with a brief input lockout so the player cannot steer straight back into the wall.
+`CharacterBody2D` with a state enum (IDLE/RUN/JUMP/FALL/WALL_SLIDE/CROUCH/DEAD) and the forgiveness mechanics that make a precision platformer feel fair: variable jump height, coyote time, jump buffering, wall slide, and wall jump with a brief input lockout so the player cannot steer straight back into the wall.
 
 **Control scheme: the player always runs.** `toggle_direction_control` (default on) makes the direction keys choose *which way to face* rather than whether to move; the player then accelerates there on its own. This suits a handheld D-pad, where holding a direction for a whole level is tiring. The persistent `facing` value is the single source of truth for horizontal direction under both schemes, so `_get_move_direction()` is scheme-agnostic. Set `toggle_direction_control = false` on the player to get the traditional hold-to-move feel (a wall slide then requires pushing into the wall, which auto-run cannot detect).
 
 Two consequences to keep in mind:
 
 - **A wall jump flips `facing` away from the wall.** Without that, auto-run would immediately steer the player back into the wall they just launched off.
-- **Levels must give the player runway.** They arrive at hazards at full speed, unable to stop except by turning around. `verify_level_geometry.py` asserts at least `AUTO_RUN_REACTION_MARGIN` (0.6s) of clear ground between the spawn and the first hazard. Level 1 has 1.35s.
+- **Levels must give the player runway.** They arrive at hazards at full speed, unable to stop except by turning around. `verify_level_geometry.py` asserts at least `AUTO_RUN_REACTION_MARGIN` (0.6s) of clear ground between the spawn and the first hazard. Level 1 has 1.53s.
+
+**Crouch.** Holding `crouch` (S / gamepad) drops the player into a short hitbox so they can pass under one-tile gaps. It is **hold-to-crouch, not a timed slide**: there is no duration, no speed boost, and **no slowdown** — crouching swaps the hitbox and nothing else, so the player keeps running at full speed under a low ceiling. The player has **two collision shapes** — a 36px standing capsule and a 20px crouched one — and `_set_body_crouched()` swaps which is enabled. Both are **bottom-anchored at the feet**, so switching never moves the player's position; anchoring them any other way would drive the taller body into the ceiling on the swap.
+
+The player stands back up when the button is released, *unless* there is no headroom, tested by `_has_headroom()`. That check deliberately does **not** test the standing capsule: the standing body always overlaps the floor beneath the player's feet, so such a test would report "blocked" forever and the crouch could never end. It tests only the band of space above the crouched body's top, which is empty exactly when standing is safe. Miss this and the symptom is a player who crouches into a tunnel and can never come out. Crouch state is also held through a fall: a crouch that leaves a ledge keeps the short hitbox for the whole arc, so the jump cannot drive the tall body into a ceiling mid-flight.
 
 Every tunable is an `@export`, so feel can be dialled in from the inspector while the game runs. **The level designs depend on these numbers** — if you change them, re-run `tools/verify_level_geometry.py`, which mirrors the constants and checks the levels are still playable. Collision layers: player is layer 2; terrain is layer 1; spikes mask layer 2.
 
@@ -139,7 +143,7 @@ Menus build on the template's inheritable `OptionControl` scenes, persisting thr
 
 ### Input
 
-Actions live in `project.godot` (`ui_accept`, `ui_cancel`, `ui_page_up/down`, `move_forward/backward/left/right`, `jump`, `interact`) and are **redeclared in `override.cfg`** to layer gamepad bindings onto the built-in `ui_*` actions. **Update both files when adding or rebinding an action**, or the gamepad binding silently will not apply.
+Actions live in `project.godot` (`ui_accept`, `ui_cancel`, `ui_page_up/down`, `move_forward/backward/left/right`, `jump`, `crouch`, `interact`) and are **redeclared in `override.cfg`** to layer gamepad bindings onto the built-in `ui_*` actions. **Update both files when adding or rebinding an action**, or the gamepad binding silently will not apply.
 
 ## Gotchas
 

@@ -4,20 +4,20 @@
 [ext_resource type="Script" path="res://scenes/game/levels/level_tile_builder.gd" id="2_12bjt"]
 [ext_resource type="TileSet" path="res://resources/tilesets/placeholder_terrain.tres" id="3_x2ody"]
 
-[node name="Level2" type="Node2D" unique_id=270119707]
+[node name="Level2" type="Node2D" unique_id=809462161]
 script = ExtResource("1_d35wr")
 next_level_path = "res://scenes/game/levels/level_3.tscn"
 
-[node name="Background" type="CanvasLayer" parent="." unique_id=848552185]
+[node name="Background" type="CanvasLayer" parent="." unique_id=520530683]
 layer = -10
 
-[node name="ColorRect" type="ColorRect" parent="Background" unique_id=1970873950]
+[node name="ColorRect" type="ColorRect" parent="Background" unique_id=1818323708]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 color = Color(0.078431375, 0.08627451, 0.12156863, 1)
 
-[node name="TileBuilder" type="Node" parent="." unique_id=1463113001]
+[node name="TileBuilder" type="Node" parent="." unique_id=905205449]
 script = ExtResource("2_12bjt")
 map = "############################################################
 #..........................................................#
@@ -40,13 +40,13 @@ map = "############################################################
 ############################################################
 ############################################################"
 
-[node name="Terrain" type="TileMapLayer" parent="TileBuilder" unique_id=1852331045]
+[node name="Terrain" type="TileMapLayer" parent="TileBuilder" unique_id=475371750]
 tile_set = ExtResource("3_x2ody")
 
-[node name="TerrainCollision" type="StaticBody2D" parent="TileBuilder" unique_id=1693268083]
+[node name="TerrainCollision" type="StaticBody2D" parent="TileBuilder" unique_id=1123777952]
 collision_mask = 0
 
-[node name="Hazards" type="Node2D" parent="TileBuilder" unique_id=46722378]
+[node name="Hazards" type="Node2D" parent="TileBuilder" unique_id=441875159]
 
-[node name="SpawnPoint" type="Marker2D" parent="." unique_id=550263362]
+[node name="SpawnPoint" type="Marker2D" parent="." unique_id=1572388417]
 unique_name_in_owner = true
