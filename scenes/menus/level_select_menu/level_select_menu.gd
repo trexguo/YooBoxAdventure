@@ -61,6 +61,10 @@ func _format_row(file_path : String, level_state : LevelState, reached : bool, c
 
 ## Turns "res://scenes/game/levels/level_3.tscn" into "Level 3".
 func _prettify(file_path : String) -> String:
+	var number := file_path.get_file().trim_prefix("level_").trim_suffix(".tscn").to_int()
+	var campaign = JSON.parse_string(FileAccess.get_file_as_string("res://resources/campaign.json"))
+	if campaign is Array and number >= 1 and number <= campaign.size():
+		return campaign[number - 1].title
 	var file_name := file_path.get_file().trim_suffix(".tscn")
 	return file_name.replace("_", " ").capitalize()
 

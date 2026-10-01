@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://bpj0wqbv1y2ma"]
 
 [ext_resource type="Script" path="res://scenes/game/player/player.gd" id="1_player"]
-[ext_resource type="Texture2D" path="res://assets/placeholder/player.png" id="2_tex"]
+[ext_resource type="Script" path="res://scenes/game/player/box_visual.gd" id="2_visual"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_stand"]
 radius = 10.0
@@ -16,8 +16,8 @@ collision_layer = 2
 collision_mask = 1
 script = ExtResource("1_player")
 
-[node name="Sprite2D" type="Sprite2D" parent="."]
-texture = ExtResource("2_tex")
+[node name="Sprite2D" type="Node2D" parent="."]
+script = ExtResource("2_visual")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 position = Vector2(0, -18)
@@ -39,5 +39,8 @@ target_position = Vector2(11, 0)
 collision_mask = 1
 
 [node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(96, -48)
+zoom = Vector2(1.5, 1.5)
+process_callback = 0
 position_smoothing_enabled = true
-position_smoothing_speed = 8.0
+position_smoothing_speed = 12.0

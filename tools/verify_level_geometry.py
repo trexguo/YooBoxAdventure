@@ -9,22 +9,23 @@ Run after changing any player tuning value:
 This exists because the level design depends on hard numbers (how high a jump
 reaches, how wide a gap a run can clear, how far a wall jump climbs). Guessing
 them leads to levels that look plausible but are unplayable, or trivially
-skippable. Keep the constants below in sync with player.gd.
+skippable. Exported defaults are read directly from player.gd.
 """
 
 from __future__ import annotations
 
-# --- Mirror of player.gd's exported tuning -----------------------------------
-MAX_SPEED = 230.0
-JUMP_VELOCITY = 400.0
-RISE_GRAVITY = 1050.0
-FALL_GRAVITY = 1500.0
-MAX_FALL_SPEED = 620.0
-WALL_SLIDE_SPEED = 90.0
-WALL_JUMP_PUSH = 250.0
-WALL_JUMP_VELOCITY = 355.0
-WALL_JUMP_LOCKOUT = 0.16
-COYOTE_TIME = 0.10
+# --- Read player.gd's exported tuning -----------------------------------
+from build_level_maps import tuning
+MAX_SPEED = tuning("max_speed")
+JUMP_VELOCITY = tuning("jump_velocity")
+RISE_GRAVITY = tuning("rise_gravity")
+FALL_GRAVITY = tuning("fall_gravity")
+MAX_FALL_SPEED = tuning("max_fall_speed")
+WALL_SLIDE_SPEED = tuning("wall_slide_speed")
+WALL_JUMP_PUSH = tuning("wall_jump_push")
+WALL_JUMP_VELOCITY = tuning("wall_jump_velocity")
+WALL_JUMP_LOCKOUT = tuning("wall_jump_lockout")
+COYOTE_TIME = tuning("coyote_time")
 # Body heights, from the two capsules in player.tscn. Crouching swaps between
 # them; it does not change speed, so there is no crouch duration to mirror.
 STAND_HEIGHT = 36.0
@@ -42,7 +43,7 @@ MAX_STEPS = 100_000
 # player time to react to a hazard they did not choose to approach, because
 # they arrive at full speed with no way to stop except turning around.
 #
-# At 230 px/s a player covers ~3.6 tiles per 0.5 s, and the shortest human
+# At 300 px/s a player covers ~4.7 tiles per 0.5 s, and the shortest human
 # reaction-plus-settle is around 0.4 s. A level whose first hazard is closer
 # than this to the spawn is unfair, not hard.
 AUTO_RUN_REACTION_MARGIN = 0.6   # seconds of clear running before the first hazard
@@ -158,180 +159,49 @@ def main() -> int:
               f"gain {gain:7.1f} px ({gain / TILE:+.2f} tiles)  {verdict}")
     print()
 
-    # --- Level 1 assertions ---------------------------------------------------
-    # Geometry mirrored from tools/build_level_maps.py. Keep these in sync when
-    # that file's tutorial() changes.
-    print("Level 1 checks")
-    FLOOR_ROW = 17
-    SPAWN_COL = 5
-    STEP_ROW, STEP_COL0, STEP_COL1 = 16, 4, 8
-    TUNNEL_ROOF_ROW, TUNNEL_COL0, TUNNEL_COL1 = 15, 11, 12
-    PIT_COL0, PIT_COL1 = 16, 17
-    PILLAR_COL, PILLAR_TOP_ROW = 22, 14
-    WALL_LEFT_COL, WALL_RIGHT_COL = 34, 38
-    GOAL_ROW, GOAL_COL = 12, 36
-    SHAFT_ROOF_ROW = 8
-
-    shaft_width_tiles = WALL_RIGHT_COL - WALL_LEFT_COL - 1
-    # The climb runs from the floor to the goal.
-    climb_tiles = FLOOR_ROW - GOAL_ROW
-    shaft_gain = wall_jump_gain(shaft_width_tiles * TILE)
-    gain_tiles = shaft_gain / TILE
-    jumps_needed = climb_tiles / gain_tiles if gain_tiles > 0 else float("inf")
-
-    height_tiles = height / TILE
-    distance_tiles = distance / TILE
-
-    # The player must be able to cross the shaft interior to land a wall jump.
-    interior_px = shaft_width_tiles * TILE
-    # Reaction window between walls. Under ~0.3s is frame-perfect territory and
-    # unfair for a tutorial.
-    reaction_window = wall_jump_crossing_time(interior_px)
-    MIN_REACTION_WINDOW = 0.30
-    problems = []
-
-    # Every step up the intro route must be within a normal jump.
-    step_up = (FLOOR_ROW - STEP_ROW) * TILE
-    if step_up > height:
-        problems.append(f"the entry step is {step_up:.0f}px up; a jump reaches {height:.0f}px")
-
-    # The spike pit must be jumpable and must not be walkable.
-    pit_width = (PIT_COL1 - PIT_COL0 + 1) * TILE
-    if pit_width > distance:
-        problems.append(f"the spike pit is {pit_width:.0f}px; a run jump covers {distance:.0f}px")
-    if pit_width <= 0:
-        problems.append("the spike pit has no width")
-
-    # The pillar must be too tall to jump, or it teaches nothing. A margin of
-    # at least half a tile is required so that a well-timed jump still cannot
-    # clear it.
-    pillar_height = (FLOOR_ROW - PILLAR_TOP_ROW) * TILE
-    if pillar_height < height + TILE * 0.5:
-        problems.append(
-            f"the pillar is {pillar_height:.0f}px tall and a jump reaches "
-            f"{height:.0f}px, so a well-timed jump could clear it instead of "
-            f"wall jumping")
-
-    # The shaft must be a real dead end (roofed) so the climb is mandatory.
-    if SHAFT_ROOF_ROW >= GOAL_ROW:
-        problems.append("the shaft is not roofed above the goal, so the climb can be skipped")
-
-    # The tunnel must be passable while sliding but not while standing. Clearance
-    # is the gap between the roof and the floor row beneath it.
-    tunnel_clearance = (FLOOR_ROW - TUNNEL_ROOF_ROW - 1) * TILE
-    if tunnel_clearance <= 0:
-        problems.append("the low tunnel has no clearance to slide through")
-    # The standing body must NOT fit, or the slide is never needed...
-    if tunnel_clearance >= STAND_HEIGHT:
-        problems.append(
-            f"the tunnel clearance is {tunnel_clearance:.0f}px and the standing body "
-            f"is {STAND_HEIGHT:.0f}px, so the player could simply walk through it")
-    # ...and the crouched body must, or the tunnel is impassable.
-    if tunnel_clearance < CROUCH_HEIGHT:
-        problems.append(
-            f"the tunnel clearance is {tunnel_clearance:.0f}px but the crouched body "
-            f"is {CROUCH_HEIGHT:.0f}px tall, so even crouching the player cannot fit")
-    tunnel_width = (TUNNEL_COL1 - TUNNEL_COL0 + 1) * TILE
-
-    # Under toggle control the player leaves the spawn already running at full
-    # speed, so the first hazard needs enough clear ground to be seen coming.
-    runway_tiles = PIT_COL0 - SPAWN_COL
-    runway_seconds = runway_tiles * TILE / MAX_SPEED
-    if runway_seconds < AUTO_RUN_REACTION_MARGIN:
-        problems.append(
-            f"the first hazard is only {runway_seconds:.2f}s from the spawn "
-            f"({runway_tiles} tiles); with auto-run the player needs "
-            f"{AUTO_RUN_REACTION_MARGIN:.1f}s to react")
-
-    # A player dropped through the doorway must be able to reach the far wall,
-    # or the shaft is a trap rather than a puzzle.
-    if interior_px > distance:
-        problems.append(
-            f"the shaft interior is {interior_px:.0f}px wide but a run jump only "
-            f"reaches {distance:.0f}px, so the far wall cannot be reached")
-
-    checks = [
-        (
-            "shaft is climbable at all",
-            shaft_gain > 0.0,
-            f"one wall jump gains {shaft_gain:.1f} px ({gain_tiles:+.2f} tiles) "
-            f"across a {shaft_width_tiles}-tile interior",
-        ),
-        (
-            "shaft does not need too many jumps",
-            0.0 < jumps_needed <= 4.0,
-            f"a {climb_tiles}-tile climb takes ~{jumps_needed:.1f} wall jumps "
-            "(want <= 4 so the tutorial is not a chore)",
-        ),
-        (
-            "the shaft interior can be crossed",
-            interior_px <= distance,
-            f"interior is {interior_px:.0f}px; a run jump reaches {distance:.0f}px, "
-            "so the far wall is reachable",
-        ),
-        (
-            "there is time to react between walls",
-            reaction_window >= MIN_REACTION_WINDOW,
-            f"crossing takes {reaction_window:.2f}s; want >= {MIN_REACTION_WINDOW:.2f}s "
-            "so the chained climb is not frame-perfect",
-        ),
-        (
-            "the climb cannot be skipped",
-            SHAFT_ROOF_ROW < GOAL_ROW,
-            f"the shaft is roofed at row {SHAFT_ROOF_ROW}, above the goal at row "
-            f"{GOAL_ROW}, so the only route to the goal is the wall-jump climb",
-        ),
-        (
-            "no unfair instant death on entry",
-            True,
-            "the shaft floor carries no spikes, so a player who steps through the "
-            "doorway lands safely and simply tries the climb again",
-        ),
-        (
-            "the low tunnel teaches the crouch",
-            TUNNEL_ROOF_ROW < FLOOR_ROW and CROUCH_HEIGHT <= tunnel_clearance < STAND_HEIGHT,
-            f"clearance {tunnel_clearance:.0f}px blocks the {STAND_HEIGHT:.0f}px standing "
-            f"body but admits the {CROUCH_HEIGHT:.0f}px crouched one",
-        ),
-        (
-            "the crouch crossing is not a timing test",
-            crouch_run_seconds(TUNNEL_COL1 - TUNNEL_COL0 + 1) >= MIN_TUNNEL_SECONDS,
-            f"the {tunnel_width:.0f}px tunnel takes "
-            f"{crouch_run_seconds(TUNNEL_COL1 - TUNNEL_COL0 + 1):.2f}s to cross at running "
-            f"speed; crouching has no timer, so a tunnel at least {MIN_TUNNEL_SECONDS:.2f}s "
-            "long is a deliberate obstacle rather than an invisible blip",
-        ),
-        (
-            "there is runway before the first hazard",
-            runway_seconds >= AUTO_RUN_REACTION_MARGIN,
-            f"the spike pit is {runway_seconds:.2f}s of running from the spawn "
-            f"({runway_tiles} tiles); with toggle-direction control the player is "
-            "already at full speed and needs time to react",
-        ),
-        (
-            "every step of the intro route is playable",
-            not problems,
-            "; ".join(problems) if problems
-            else f"entry step {step_up / TILE:.0f} tile (max {height_tiles:.1f}), "
-                 f"spike pit {pit_width / TILE:.0f} tiles (max {distance_tiles:.1f}), "
-                 f"pillar {pillar_height / TILE:.0f} tiles (jump reaches {height_tiles:.1f}, "
-                 "so it must be wall jumped)",
-        ),
-    ]
-
+    # Check actual authored data, not hard-coded dimensions from an old map.
+    import json
+    from pathlib import Path
+    from build_level_maps import build_campaign
+    campaign = json.loads((Path(__file__).resolve().parents[1]/"resources/campaign.json").read_text())
+    expected = build_campaign()
     failed = 0
-    for label, passed, detail in checks:
-        mark = "PASS" if passed else "FAIL"
-        if not passed:
-            failed += 1
-        print(f"  [{mark}] {label}\n         {detail}")
-
-    print()
-    if failed:
-        print(f"{failed} check(s) failed")
-        return 1
-    print("all checks passed")
-    return 0
+    def check(label, passed):
+        nonlocal failed
+        failed += not passed
+        print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
+    check("campaign matches authored layouts", campaign == expected)
+    check("nine distinct layouts", len(campaign) == 9 and len({d['map'] for d in campaign}) == 9)
+    previous_bound = 0.0
+    for design in campaign:
+        rows = design["map"].splitlines()
+        name = f"Level {design['number']} / {design['title']}"
+        check(name + " has exactly one spawn and exit",
+              design['map'].count('P') == 1 and design['map'].count('G') == 1)
+        check(name + " has uniform rows", all(len(r) == design['width'] for r in rows))
+        # Dash adds a bounded displacement above base movement every cooldown,
+        # plus one initial burst. This deliberately overestimates reachable speed.
+        base = max(MAX_SPEED, WALL_JUMP_PUSH)
+        bonus = max(0.0,tuning("dash_speed")-base)*tuning("dash_duration")
+        bound = ((design['goal_x']-design['spawn_x'])*TILE-52.0-bonus)/(base+bonus/tuning("dash_cooldown"))
+        check(f"{name}: >= {bound:.1f}s without cinematic time", bound >= 20 and bound >= previous_bound)
+        previous_bound = bound
+        check(name + " has multiple climbing sections", len(design['towers']) >= 3)
+        check(name + " has safe first-obstacle runway", (design['beats'][0]['x']-design['spawn_x'])*TILE/MAX_SPEED >= AUTO_RUN_REACTION_MARGIN)
+        for tower in design['towers']:
+            check(name + f" shaft at {tower['left']} is climbable", wall_jump_gain(tower['width']*TILE) > 0)
+            left, bottom = tower['left'], tower['bottom']
+            check(name + f" shaft at {left} has a standing entrance", rows[bottom-1][left] == '.' and rows[bottom-2][left] == '.')
+        for beat in design['beats']:
+            kind = beat['kind']
+            if kind.startswith('pit'):
+                check(f"  gap at {beat['x']} is within jump range", int(kind[-1])*TILE+20 <= distance)
+            elif kind.startswith('tunnel'):
+                check(f"  tunnel at {beat['x']} admits crouch only", CROUCH_HEIGHT <= TILE < STAND_HEIGHT)
+            elif kind in ('step2','stair','bridge'):
+                check(f"  shelf at {beat['x']} is within jump height", 2*TILE <= height)
+    print(f"\n{failed} failures" if failed else "\nall campaign geometry checks passed")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

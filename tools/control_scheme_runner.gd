@@ -25,6 +25,10 @@ func _run_suite() -> void:
 	await _test_crouch_keeps_full_speed()
 	await _test_cannot_stand_under_ceiling()
 	await _test_stands_up_after_clearing_ceiling()
+	await _test_stable_body_at_wall()
+	await _test_death_animation_and_respawn()
+	await _test_air_dash()
+	await _test_dash_wall_collision()
 
 # --- World helpers -----------------------------------------------------------
 
@@ -305,3 +309,104 @@ func _expect(label : String, condition : bool, detail : String) -> void:
 	else:
 		_failures += 1
 		print("  [FAIL] %s\n         %s" % [label, detail])
+
+func _test_stable_body_at_wall() -> void:
+	var world := _make_world(30, 5)
+	var player = world[1]
+	var standing_height: float = player._sprite._height
+	await _step(80)
+	_expect("wall contact does not automatically crouch or resize the body",
+		not player._crouched and is_equal_approx(player._sprite._height, standing_height),
+		"unpressed crouch must leave the standing silhouette stable")
+	world[0].queue_free()
+	await _step(2)
+
+func _test_death_animation_and_respawn() -> void:
+	var level = load("res://scenes/game/levels/level_1.tscn").instantiate()
+	level.play_intro = false
+	add_child(level)
+	var player = level.get_player()
+	var deaths_before: int = level.level_state.deaths
+	await _step(3)
+	var death_position: Vector2 = player.global_position
+	level.kill_player()
+	level.kill_player()
+	_expect("hazard death enters DEAD before respawning",
+		player.state == player.State.DEAD and level.player_is_dead,
+		"the death animation must run at the point of impact")
+	await _step(6)
+	_expect("dead player stays at impact and plays fragments",
+		player.global_position.is_equal_approx(death_position) and player._sprite.pose == "dead" and player._sprite._death_time > 0.07,
+		"death must freeze motion without teleporting immediately")
+	_expect("repeated hazard contact only counts one death",
+		level.level_state.deaths == deaths_before + 1,
+		"death calls during animation must be ignored")
+	await _step(25)
+	_expect("respawn restores movement and clears death visuals",
+		not level.player_is_dead and player.state != player.State.DEAD and player._sprite.pose != "dead" and player._input_enabled,
+		"respawn must reset both movement and presentation")
+	level.level_state.deaths = deaths_before
+	level.queue_free()
+	await _step(2)
+
+func _test_air_dash() -> void:
+	var world := _make_world(200)
+	var player = world[1]
+	player.position = Vector2(200,-1500)
+	await _step(2)
+	var start: Vector2 = player.position
+	Input.action_press("crouch")
+	await _step(2)
+	start = player.position
+	await _step(3)
+	_expect("air crouch starts dash and suspends falling",
+		player.state == player.State.DASH and player.position.x-start.x > 20 and absf(player.position.y-start.y) < 0.01,
+		"state=%d dx=%.2f dy=%.2f" % [player.state,player.position.x-start.x,player.position.y-start.y])
+	Input.action_release("crouch")
+	await _step(8)
+	_expect("dash ends and gravity resumes",player._dash_timer <= 0 and player.velocity.y > 0,
+		"dash must end after its configured duration")
+	await _step(105)
+	Input.action_press("crouch")
+	await _step(2)
+	_expect("dash cannot repeat in one airtime even after cooldown",
+		player._dash_timer <= 0 and not player._dash_available,
+		"landing is required to recharge")
+	_release_all()
+	player.respawn_at(Vector2(200,-100))
+	player.set_input_enabled(false)
+	Input.action_press("crouch")
+	await _step(2)
+	_expect("locked input cannot dash",player._dash_timer <= 0,"cinematics must lock dash")
+	_release_all()
+	player.set_input_enabled(true)
+	await _step(100)
+	Input.action_press("jump")
+	await _step(6)
+	Input.action_press("move_left")
+	Input.action_press("crouch")
+	await _step(3)
+	_expect("landing restores dash and left input selects its direction",
+		player.state == player.State.DASH and player.velocity.x < 0,
+		"dash should follow the selected direction after landing")
+	player.die()
+	_expect("death cancels active dash",player._dash_timer <= 0 and player.state == player.State.DEAD,
+		"a dead player must not continue dashing")
+	player.respawn_at(Vector2(200,-100))
+	_expect("respawn restores dash availability",player._dash_available and player._dash_cooldown_timer <= 0,
+		"a new life must clear dash timers")
+	_release_all()
+	world[0].free()
+
+func _test_dash_wall_collision() -> void:
+	var world := _make_world(30,12)
+	var player = world[1]
+	player.position = Vector2(350,-160)
+	await _step(2)
+	Input.action_press("crouch")
+	await _step(8)
+	_expect("dash stops at solid walls without passing through",
+		player.position.x <= 374.1 and player._dash_timer <= 0,
+		"move_and_slide must preserve terrain collision")
+	_release_all()
+	world[0].free()

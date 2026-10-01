@@ -108,30 +108,30 @@ Every level is a `Node2D` using `level.gd` and must contain a `%SpawnPoint` Mark
 
 A level's layout is **ASCII text**, not hand-placed nodes. Editing level geometry means editing a map, not a `.tscn`.
 
-- `tools/build_level_maps.py` is the authoring tool: it draws each map with a small `Grid` helper and rewrites the literals in `tools/generate_levels.gd`, padded to a uniform width. **Edit maps here** — hand-editing a level `.tscn` will be clobbered on the next regeneration.
+- `tools/build_level_maps.py` is the authoring tool: it draws each map with a small `Grid` helper and writes maps plus chapter metadata to `resources/campaign.json`. `tools/generate_levels.gd` reads that data to generate scenes. **Edit maps here** — hand-editing a level `.tscn` will be clobbered on the next regeneration.
 - Legend: `#` solid, `^` spikes, `P` spawn, `G` goal, `.` empty.
 - `LevelTileBuilder` bakes the map into a `TileMapLayer`, merges horizontally adjacent solid tiles into merged `RectangleShape2D` runs on a `StaticBody2D`, and creates one `Area2D` per spike.
 - **The terrain collision container must be a `StaticBody2D`.** `CollisionShape2D` nodes parented to a plain `Node2D` are silently inert — the symptom is the player falling through the floor with no error. The builder validates this and refuses to bake otherwise.
 - Levels deliberately do **not** instance a shared template scene: Godot cannot override a child node's property through a scene instance, so a per-level map could never reach the `TileBuilder` child. `generate_levels.gd` emits the full node tree for each level instead.
 
-Tiles are **32×32**. Level 1 is a real tutorial; levels 2–9 are runnable skeletons meant to be replaced one at a time.
+Tiles are **32×32**. All nine levels are full chase routes authored in `tools/build_level_maps.py` and exported to `resources/campaign.json`. Level 1 teaches movement, safe air dash, crouching, jumping and repeated wall jumps. Routes ascend through 3–7 intermediate shafts, gaining 18–91 tiles of height. Routes have a 21.3–29.0s conservative travel lower bound including air dash; actual automated, death-free traversal takes 27.4–52.0s. Attempt time resets on death; total active time remains separate. Respawn snaps the smoothed camera to spawn. See `docs/CAMPAIGN.md`.
 
 ### Player (`scenes/game/player/`)
 
-`CharacterBody2D` with a state enum (IDLE/RUN/JUMP/FALL/WALL_SLIDE/CROUCH/DEAD) and the forgiveness mechanics that make a precision platformer feel fair: variable jump height, coyote time, jump buffering, wall slide, and wall jump with a brief input lockout so the player cannot steer straight back into the wall.
+`CharacterBody2D` with a state enum (IDLE/RUN/JUMP/FALL/WALL_SLIDE/CROUCH/DEAD/DASH) and the forgiveness mechanics that make a precision platformer feel fair: variable jump height, coyote time, jump buffering, wall slide, and wall jump with a brief input lockout so the player cannot steer straight back into the wall.
 
 **Control scheme: the player always runs.** `toggle_direction_control` (default on) makes the direction keys choose *which way to face* rather than whether to move; the player then accelerates there on its own. This suits a handheld D-pad, where holding a direction for a whole level is tiring. The persistent `facing` value is the single source of truth for horizontal direction under both schemes, so `_get_move_direction()` is scheme-agnostic. Set `toggle_direction_control = false` on the player to get the traditional hold-to-move feel (a wall slide then requires pushing into the wall, which auto-run cannot detect).
 
 Two consequences to keep in mind:
 
 - **A wall jump flips `facing` away from the wall.** Without that, auto-run would immediately steer the player back into the wall they just launched off.
-- **Levels must give the player runway.** They arrive at hazards at full speed, unable to stop except by turning around. `verify_level_geometry.py` asserts at least `AUTO_RUN_REACTION_MARGIN` (0.6s) of clear ground between the spawn and the first hazard. Level 1 has 1.53s.
+- **Levels must give the player runway.** They arrive at hazards at full speed, unable to stop except by turning around. `verify_level_geometry.py` asserts at least `AUTO_RUN_REACTION_MARGIN` (0.6s) of clear ground between the spawn and the first hazard. Level 1 has over 1.7s before its first obstacle.
 
 **Crouch.** Holding `crouch` (S / gamepad) drops the player into a short hitbox so they can pass under one-tile gaps. It is **hold-to-crouch, not a timed slide**: there is no duration, no speed boost, and **no slowdown** — crouching swaps the hitbox and nothing else, so the player keeps running at full speed under a low ceiling. The player has **two collision shapes** — a 36px standing capsule and a 20px crouched one — and `_set_body_crouched()` swaps which is enabled. Both are **bottom-anchored at the feet**, so switching never moves the player's position; anchoring them any other way would drive the taller body into the ceiling on the swap.
 
 The player stands back up when the button is released, *unless* there is no headroom, tested by `_has_headroom()`. That check deliberately does **not** test the standing capsule: the standing body always overlaps the floor beneath the player's feet, so such a test would report "blocked" forever and the crouch could never end. It tests only the band of space above the crouched body's top, which is empty exactly when standing is safe. Miss this and the symptom is a player who crouches into a tunnel and can never come out. Crouch state is also held through a fall: a crouch that leaves a ledge keeps the short hitbox for the whole arc, so the jump cannot drive the tall body into a ceiling mid-flight.
 
-Every tunable is an `@export`, so feel can be dialled in from the inspector while the game runs. **The level designs depend on these numbers** — if you change them, re-run `tools/verify_level_geometry.py`, which mirrors the constants and checks the levels are still playable. Collision layers: player is layer 2; terrain is layer 1; spikes mask layer 2.
+Every tunable is an `@export`, so feel can be dialled in from the inspector while the game runs. **The level designs depend on these numbers** — if you change them, re-run `tools/verify_level_geometry.py`, which reads the exported defaults and checks the levels are still playable. Collision layers: player is layer 2; terrain is layer 1; spikes mask layer 2.
 
 ### Menus and settings
 
@@ -151,4 +151,22 @@ Actions live in `project.godot` (`ui_accept`, `ui_cancel`, `ui_page_up/down`, `m
 - Save data is at `user://global_state.tres`. Delete it for a first-run state; the in-game reset control calls `GameState.reset()`.
 - `New Game` confirms before wiping progress whenever `GameState.has_progress()` — do not narrow that back to "the Continue button is visible", which would let a mid-progress player erase their save in one click.
 - Reflection-based tab lookup in `master_options_menu_with_tabs.gd` matches the literal tab titles `"Controls"` and `"Inputs"`. Renaming those tabs breaks it.
-- Levels 2–9 are placeholders. Each is expected to be replaced with a real design; only level 1's geometry has been validated against the movement envelope in detail.
+- All nine levels are verified against the movement envelope and traversed with real physics by `tools/campaign_playthrough.gd`. Shared `EscapeDirector` instances play ZhangAss/Yoo intro and outro animations; set `play_intro = false` for physics tests. Cinematics are excluded from `elapsed_time`; normal deaths do not replay the intro.
+
+### Campaign checks
+
+```bash
+$GODOT --headless --path . --fixed-fps 60 --script res://tools/campaign_playthrough.gd
+$GODOT --headless --path . --fixed-fps 60 --script res://tools/test_campaign_story.gd
+```
+
+The first runs real physics against each complete map; fixed-fps makes tests fast without changing game-time measurements. The second verifies intro locking, skip, carrying Yoo, delayed completion, and the final rescue. Both restore the save file after finishing.
+
+Air dash shares `crouch`: a fresh airborne press launches at 620px/s for 0.16s.
+One charge per airtime, restored on landing, with a separate 1.6s launch cooldown.
+It pauses gravity and locks burst direction; move_and_slide preserves collisions.
+Dash tunables affect the conservative duration check in verify_level_geometry.py.
+
+Player pace: run/wall push 300px/s, dash 620px/s; ground/turn acceleration 1900px/s². Camera zoom is 1.5 (32px tiles display at 48px), smoothing 12, lead (96,-48). Camera lead changes on ground, preserving its direction through wall chains. Keep the 32px world geometry; screen enlargement comes from zoom.
+
+Physics interpolation is enabled, with jitter fix 0. Camera2D uses the physics callback, and camera lead updates in the player physics tick. Reset interpolation after spawn/respawn/intro teleporting; cinematic EscapeDirector nodes opt out because their tweens run on rendered frames. Do not move interpolated nodes in `_process()`.
