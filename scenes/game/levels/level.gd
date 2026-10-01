@@ -16,7 +16,7 @@ extends Node2D
 ##   Level            (Node2D, this script)
 ##   ├── TileBuilder  (LevelTileBuilder, holds the ASCII map)
 ##   │   ├── Terrain          (TileMapLayer)
-##   │   ├── TerrainCollision (Node2D)
+##   │   ├── TerrainCollision (StaticBody2D)
 ##   │   └── Hazards          (Node2D)
 ##   └── SpawnPoint   (Marker2D, moved by the builder)
 ## [/codeblock]
@@ -27,6 +27,10 @@ signal level_lost
 signal level_won(level_path : String)
 @warning_ignore("unused_signal")
 signal level_changed(level_path : String)
+
+@export_group("Campaign")
+@export_range(1, 9) var level_number: int = 1
+@export var play_intro: bool = true
 
 @export_group("Flow")
 ## Optional path to the next level if using an open world level system.
@@ -60,6 +64,8 @@ var level_state : LevelState
 var player_is_dead : bool = false
 ## Seconds since the level was entered, used for best-time tracking.
 var elapsed_time : float = 0.0
+## Total active play across attempts; best time uses only the winning attempt.
+var total_play_time : float = 0.0
 
 var _tile_builder : LevelTileBuilder
 var _player : Node2D
@@ -81,7 +87,12 @@ func _ready() -> void:
 	_is_completed = false
 	elapsed_time = 0.0
 	_build_from_map()
+	kill_plane_y = _get_map_pixel_size().y + 128.0
 	_spawn_player()
+	var campaign = JSON.parse_string(FileAccess.get_file_as_string("res://resources/campaign.json"))
+	var story := get_node_or_null("EscapeDirector")
+	if story and campaign is Array:
+		story.configure(self, campaign[level_number - 1])
 	_log("ready (player at %s)" % spawn_point.global_position)
 
 ## Bakes the ASCII map and wires the resulting spawn and goal positions.
@@ -130,6 +141,7 @@ func _spawn_player() -> void:
 	_player = scene.instantiate()
 	add_child(_player)
 	_player.global_position = spawn_point.global_position
+	_player.reset_physics_interpolation()
 	_configure_camera()
 
 ## Clamps the player's camera to the map bounds, so the view never scrolls past
@@ -147,6 +159,7 @@ func _configure_camera() -> void:
 	camera.limit_top = 0
 	camera.limit_right = int(size.x)
 	camera.limit_bottom = int(size.y)
+	camera.reset_smoothing()
 
 ## Returns the level's pixel dimensions, derived from the baked terrain.
 func _get_map_pixel_size() -> Vector2:
@@ -176,6 +189,9 @@ func win_level() -> void:
 	_is_completed = true
 	_log("won in %.3fs" % elapsed_time)
 	GameState.record_level_completed(scene_file_path, elapsed_time)
+	var story := get_node_or_null("EscapeDirector")
+	if story:
+		await story.play_outro()
 	level_won.emit(next_level_path)
 
 ## Called when the player fails.
@@ -185,9 +201,11 @@ func lose_level() -> void:
 
 func _process(delta : float) -> void:
 	# The clock stops once the level is won so the recorded time is the run.
-	if _is_completed or player_is_dead:
+	var story := get_node_or_null("EscapeDirector")
+	if _is_completed or player_is_dead or (story and story.cinematic_active):
 		return
 	elapsed_time += delta
+	total_play_time += delta
 	if _player and is_instance_valid(_player) and _player.global_position.y > kill_plane_y:
 		kill_player()
 
@@ -202,8 +220,10 @@ func kill_player() -> void:
 	if level_state:
 		level_state.deaths += 1
 	_log("player died, respawning at %s" % ("checkpoint" if _active_checkpoint else "spawn"))
+	if is_instance_valid(_player):
+		_player.die()
+	await get_tree().create_timer(maxf(respawn_delay, 0.35), false).timeout
 	_respawn_player()
-	await get_tree().create_timer(respawn_delay, false).timeout
 	player_is_dead = false
 
 ## Moves the player to the respawn point and clears their momentum.
@@ -214,6 +234,11 @@ func _respawn_player() -> void:
 	if target == null:
 		return
 	_player.respawn_at(target.global_position)
+	elapsed_time = 0.0
+	var camera := _player.get_node_or_null("Camera2D") as Camera2D
+	if camera:
+		camera.reset_smoothing()
+		camera.force_update_scroll()
 
 ## Returns the player node, or null if this level has no player.
 func get_player() -> Node2D:

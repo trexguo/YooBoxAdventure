@@ -6,9 +6,13 @@
 [ext_resource type="PackedScene" path="res://scenes/windows/main_menu_credits_window.tscn" id="4_m0ubd"]
 [ext_resource type="PackedScene" path="res://addons/maaacks_game_template/base/nodes/windows/confirmation_popup_window_panel.tscn" id="5_627ab"]
 
+[ext_resource type="Theme" path="res://resources/themes/cartoon_box.tres" id="6_theme"]
+[ext_resource type="PackedScene" path="res://scenes/menus/level_select_menu/level_select_menu.tscn" id="7_levels"]
+
 [node name="MainMenu" unique_id=869232425 instance=ExtResource("1_ub2bi")]
+theme = ExtResource("6_theme")
 script = ExtResource("2_x31ro")
-level_select_packed_scene = null
+level_select_packed_scene = ExtResource("7_levels")
 confirm_new_game = true
 options_packed_scene = ExtResource("3_0jpat")
 credits_packed_scene = ExtResource("4_m0ubd")
@@ -18,6 +22,7 @@ unique_name_in_owner = true
 visible = false
 layout_mode = 2
 text = "Continue"
+theme_type_variation = &"MintButton"
 
 [node name="LevelSelectButton" type="Button" parent="MenuContainer/MenuButtonsMargin/MenuButtonsContainer/MenuButtonsBoxContainer" parent_id_path=PackedInt32Array(2017477786) index="2" unique_id=1348895676]
 unique_name_in_owner = true
@@ -28,16 +33,42 @@ text = "Level Select"
 [node name="NewGameConfirmation" parent="." index="5" unique_id=487332143 instance=ExtResource("5_627ab")]
 unique_name_in_owner = true
 visible = false
-custom_minimum_size = Vector2(420, 200)
+custom_minimum_size = Vector2(650, 320)
 layout_mode = 1
-offset_left = -210.0
-offset_top = -100.0
-offset_right = 210.0
-offset_bottom = 100.0
+offset_left = -325.0
+offset_top = -160.0
+offset_right = 325.0
+offset_bottom = 160.0
 title = "New Game"
 text = "Are you sure you want to start a new game?
 
 All progress in the current game will be lost."
+
+[node name="TitleLabel" parent="MenuContainer/TitleMargin/TitleContainer" index="0"]
+theme_override_font_sizes/font_size = 60
+
+[node name="SubTitleLabel" parent="MenuContainer/SubTitleMargin/SubTitleContainer" index="0"]
+text = "PACK. JUMP. CHASE."
+
+[node name="MenuButtonsBoxContainer" parent="MenuContainer/MenuButtonsMargin/MenuButtonsContainer" index="0"]
+offset_left = -240.0
+offset_top = -240.0
+offset_right = 240.0
+offset_bottom = 240.0
+theme_override_constants/separation = 14
+
+[node name="OptionsButton" parent="MenuContainer/MenuButtonsMargin/MenuButtonsContainer/MenuButtonsBoxContainer" index="3"]
+theme_type_variation = &"BlueButton"
+
+[node name="ExitButton" parent="MenuContainer/MenuButtonsMargin/MenuButtonsContainer/MenuButtonsBoxContainer" index="5"]
+theme_type_variation = &"CoralButton"
+
+[node name="ExitConfirmation" parent="." index="4"]
+custom_minimum_size = Vector2(600, 300)
+offset_left = -300.0
+offset_top = -150.0
+offset_right = 300.0
+offset_bottom = 150.0
 
 [connection signal="pressed" from="MenuContainer/MenuButtonsMargin/MenuButtonsContainer/MenuButtonsBoxContainer/ContinueGameButton" to="." method="_on_continue_game_button_pressed"]
 [connection signal="pressed" from="MenuContainer/MenuButtonsMargin/MenuButtonsContainer/MenuButtonsBoxContainer/LevelSelectButton" to="." method="_on_level_select_button_pressed"]

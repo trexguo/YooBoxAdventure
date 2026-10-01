@@ -17,16 +17,17 @@ extends CharacterBody2D
 ## Every tunable is exported so the feel can be dialled in from the inspector
 ## while the game is running.
 
-enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, CROUCH, DEAD }
+enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, CROUCH, DEAD, DASH }
+const VISUAL_POSES := ["idle", "run", "jump", "fall", "wall_slide", "crouch", "dead", "dash"]
 
 ## Horizontal speed cap while running, in pixels per second.
-@export var max_speed : float = 230.0
+@export var max_speed : float = 300.0
 ## Ground acceleration. Higher is snappier.
-@export var ground_acceleration : float = 1400.0
+@export var ground_acceleration : float = 1900.0
 ## Ground friction applied when no direction is held.
-@export var ground_friction : float = 1600.0
+@export var ground_friction : float = 2100.0
 ## Air acceleration. Lower than ground for a floatier feel.
-@export var air_acceleration : float = 1000.0
+@export var air_acceleration : float = 1400.0
 ## Air friction applied when no direction is held.
 @export var air_friction : float = 600.0
 
@@ -52,13 +53,23 @@ enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, CROUCH, DEAD }
 ## Downward speed cap while sliding on a wall.
 @export var wall_slide_speed : float = 90.0
 ## Horizontal push applied away from the wall on a wall jump.
-@export var wall_jump_push : float = 250.0
+@export var wall_jump_push : float = 300.0
 ## Upward velocity applied on a wall jump.
 @export var wall_jump_velocity : float = 355.0
 ## Seconds after a wall jump during which horizontal input is ignored.
 @export var wall_jump_lockout : float = 0.16
 ## If true, the player slides down walls without holding into them.
 @export var auto_wall_slide : bool = false
+
+@export_group("Air Dash")
+@export var dash_speed: float = 620.0
+@export var dash_duration: float = 0.16
+## Minimum interval between launches, independent of landing.
+@export var dash_cooldown: float = 1.6
+var _dash_timer := 0.0
+var _dash_cooldown_timer := 0.0
+var _dash_available := true
+var _dash_direction := 1
 
 @export_group("Crouch")
 ## Collision layer to test for headroom when the player straightens up.
@@ -75,13 +86,32 @@ enum State { IDLE, RUN, JUMP, FALL, WALL_SLIDE, CROUCH, DEAD }
 ## How quickly the player accelerates up to full speed under toggle control.
 ## Kept separate from [member ground_acceleration] because the two are doing
 ## different jobs: this is the turnaround, not the response to a held key.
-@export var turn_acceleration : float = 1400.0
+@export var turn_acceleration : float = 1900.0
 ## If true, releasing all direction keys stops the player instead of leaving
 ## them running. Off by default: a precision platformer reads better when the
 ## character keeps its momentum.
 @export var stop_when_no_direction : bool = false
 ## Facing chosen when the level starts. 1 is right, -1 is left.
 @export var initial_facing : int = 1
+
+@export_group("Screen Controls")
+## Viewport pixels needed to recognize a downward swipe.
+@export var swipe_down_distance: float = 48.0
+## Short horizontal swipes select the autorun direction.
+@export var swipe_side_distance: float = 32.0
+## Brief recognition window lets a downward swipe crouch without jumping first.
+@export var screen_press_delay: float = 0.08
+var _pointer_id: int = -2 # -2: none; -1: mouse; >= 0: touch index.
+var _pointer_origin := Vector2.ZERO
+var _pointer_age := 0.0
+var _pointer_swiped := false
+var _pointer_crouching := false
+var _pointer_direction_pending: int = 0
+var _pointer_jump_started := false
+var _pointer_jump_pending := false
+var _pointer_crouch_pending := false
+var _pointer_jump_this_tick := false
+var _pointer_crouch_this_tick := false
 
 @export_group("Detection")
 ## Reach of the wall-detection rays, in pixels.
@@ -123,13 +153,10 @@ var _direction_held : int = 0
 
 @onready var _wall_check_left : RayCast2D = $WallCheckLeft
 @onready var _wall_check_right : RayCast2D = $WallCheckRight
-@onready var _sprite : Sprite2D = $Sprite2D
+@onready var _camera: Camera2D = $Camera2D
+@onready var _sprite : Node2D = $Sprite2D
 @onready var _stand_shape : CollisionShape2D = $CollisionShape2D
 @onready var _crouch_shape : CollisionShape2D = $CrouchCollisionShape2D
-
-## Vertical offset applied to the sprite while crouched, so the shorter body sits
-## on the floor rather than floating. Half the difference in body height.
-var _sprite_crouch_offset : float = 0.0
 
 ## A zero-size shape used to probe the space the standing body would occupy.
 var _headroom_shape := RectangleShape2D.new()
@@ -145,6 +172,7 @@ func _ready() -> void:
 	add_to_group(&"player")
 	GameState.mark_level_reached(scene_file_path)
 	facing = -1 if initial_facing < 0 else 1
+	_camera.position.x = float(facing)*96.0
 	_setup_crouch()
 
 ## Prepares the crouch geometry and the reusable headroom probe.
@@ -160,7 +188,6 @@ func _setup_crouch() -> void:
 	if stand == null or crouch == null:
 		return
 	var extra : float = stand.height - crouch.height
-	_sprite_crouch_offset = extra * 0.5
 	# The slab spans from the top of the crouched body upward by the difference
 	# in height, centred on the player's feet (y = 0 is the feet under both
 	# shapes, which are bottom-anchored).
@@ -177,8 +204,12 @@ func _setup_crouch() -> void:
 ## Returns the player to a position with all momentum cleared.
 ## Called by [Level] when respawning after a death.
 func respawn_at(position_ : Vector2) -> void:
+	_reset_screen_input()
 	global_position = position_
 	velocity = Vector2.ZERO
+	_dash_timer = 0.0
+	_dash_cooldown_timer = 0.0
+	_dash_available = true
 	_wall_jump_lockout_timer = 0.0
 	_jump_buffer_timer = 0.0
 	_jump_cut_applied = false
@@ -186,15 +217,21 @@ func respawn_at(position_ : Vector2) -> void:
 	_input_enabled = true
 	_direction_held = 0
 	_set_body_crouched(false)
+	_sprite.reset()
 	# Restart facing the level's default way, so a respawn is consistent.
 	facing = -1 if initial_facing < 0 else 1
+	_camera.position.x = float(facing)*96.0
 	_set_state(State.FALL)
+	reset_physics_interpolation()
 
 ## Kills the player and asks the level to respawn them.
 func die() -> void:
 	if state == State.DEAD:
 		return
+	_reset_screen_input()
+	_dash_timer = 0.0
 	_set_state(State.DEAD)
+	_update_visual_pose()
 	velocity = Vector2.ZERO
 	_input_enabled = false
 	died.emit()
@@ -205,6 +242,98 @@ func die() -> void:
 ## Enables or disables player input, e.g. while a menu is open.
 func set_input_enabled(enabled : bool) -> void:
 	_input_enabled = enabled
+	if not enabled:
+		_reset_screen_input()
+		_dash_timer = 0.0
+
+# Screen input stays local: releasing a finger never releases a keyboard key.
+func _reset_screen_input() -> void:
+	_pointer_id = -2
+	_pointer_direction_pending = 0
+	_pointer_jump_pending = false
+	_pointer_crouch_pending = false
+	_pointer_jump_this_tick = false
+	_pointer_crouch_this_tick = false
+	_pointer_swiped = false
+	_pointer_crouching = false
+	_pointer_jump_started = false
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PAUSED or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		_reset_screen_input()
+
+func _screen_input_allowed() -> bool:
+	return _input_enabled and state != State.DEAD and not get_tree().paused
+
+func _over_screen_ui(at: Vector2) -> bool:
+	for control in get_tree().get_nodes_in_group("gameplay_pointer_blocker"):
+		if control is Control and control.is_visible_in_tree() and control.get_global_rect().has_point(at):
+			return true
+	return false
+
+func _begin_screen_press(id: int, at: Vector2) -> void:
+	if _pointer_id != -2 or not _screen_input_allowed() or _over_screen_ui(at):
+		return
+	_pointer_id = id
+	_pointer_origin = at
+	_pointer_age = 0.0
+	_pointer_swiped = false
+	_pointer_crouching = false
+	_pointer_jump_started = false
+
+func _end_screen_press(cancelled: bool = false) -> void:
+	if not cancelled and not _pointer_swiped and not _pointer_jump_started and _screen_input_allowed():
+		_pointer_jump_pending = true
+	_pointer_id = -2
+	_pointer_jump_started = false
+
+func _drag_screen_press(at: Vector2) -> void:
+	if _pointer_swiped or not _screen_input_allowed():
+		return
+	var travel := at - _pointer_origin
+	if absf(travel.x) >= swipe_side_distance and absf(travel.x) > absf(travel.y):
+		_pointer_swiped = true
+		_pointer_jump_pending = false
+		_pointer_jump_started = false
+		_pointer_direction_pending = 1 if travel.x > 0.0 else -1
+	elif travel.y >= swipe_down_distance and travel.y > absf(travel.x):
+		_pointer_swiped = true
+		_pointer_jump_pending = false
+		_pointer_jump_started = false
+		_pointer_crouching = true
+		_pointer_crouch_pending = true
+
+func _input(event: InputEvent) -> void:
+	# GUI emulation can consume screen events. Handle gameplay presses first,
+	# reserving UI hit areas and ignoring synthetic mouse copies of touches.
+	if event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
+	if event is InputEventScreenTouch and event.pressed and not event.canceled:
+		_begin_screen_press(event.index,event.position)
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		_begin_screen_press(-1,event.position)
+	# Owned gestures must release even when the pointer ends over a UI control.
+	if _pointer_id == -2 or event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
+	if event is InputEventScreenTouch and event.index == _pointer_id and (not event.pressed or event.canceled):
+		_end_screen_press(event.canceled)
+	elif event is InputEventScreenDrag and event.index == _pointer_id:
+		_drag_screen_press(event.position)
+	elif _pointer_id == -1 and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_end_screen_press()
+	elif _pointer_id == -1 and event is InputEventMouseMotion:
+		_drag_screen_press(event.position)
+
+func _update_screen_input(delta: float) -> void:
+	if _pointer_id != -2 and not _pointer_swiped and not _pointer_jump_started:
+		_pointer_age += delta
+		if _pointer_age >= screen_press_delay:
+			_pointer_jump_started = true
+			_pointer_jump_pending = true
+	_pointer_jump_this_tick = _pointer_jump_pending
+	_pointer_crouch_this_tick = _pointer_crouch_pending
+	_pointer_jump_pending = false
+	_pointer_crouch_pending = false
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -241,6 +370,9 @@ func _update_facing() -> void:
 	_direction_held = pressed
 	if pressed == 0 and stop_when_no_direction:
 		facing = 0
+	if _input_enabled and _pointer_direction_pending != 0:
+		facing = _pointer_direction_pending
+		_pointer_direction_pending = 0
 
 ## Returns the horizontal direction to move this frame.
 ##
@@ -252,10 +384,10 @@ func _get_move_direction() -> float:
 	return float(facing)
 
 func _is_jump_just_pressed() -> bool:
-	return _input_enabled and Input.is_action_just_pressed(&"jump")
+	return _input_enabled and (Input.is_action_just_pressed(&"jump") or _pointer_jump_this_tick)
 
 func _is_jump_held() -> bool:
-	return _input_enabled and Input.is_action_pressed(&"jump")
+	return _input_enabled and (Input.is_action_pressed(&"jump") or (_pointer_id != -2 and _pointer_jump_started and not _pointer_swiped))
 
 # --- Crouch ------------------------------------------------------------------
 
@@ -284,9 +416,9 @@ func _has_headroom() -> bool:
 
 ## True while the player is holding the crouch button.
 func _is_crouch_held() -> bool:
-	return _input_enabled and Input.is_action_pressed(&"crouch")
+	return _input_enabled and (Input.is_action_pressed(&"crouch") or (_pointer_id != -2 and _pointer_crouching) or _pointer_crouch_this_tick)
 
-## Swaps which hitbox is active and shifts the sprite to match.
+## Swaps the hitbox and animates the feet-anchored box pose.
 ##
 ## Both shapes are bottom-anchored at the feet, so this never moves the player:
 ## the shorter body simply occupies the lower part of the space the tall one did.
@@ -298,7 +430,7 @@ func _set_body_crouched(crouched : bool) -> void:
 		return
 	_stand_shape.set_deferred(&"disabled", crouched)
 	_crouch_shape.set_deferred(&"disabled", not crouched)
-	_sprite.position.y = _sprite_crouch_offset if crouched else 0.0
+	_update_visual_pose()
 
 ## Keeps the hitbox in sync with the crouch button and the ceiling.
 ##
@@ -311,7 +443,7 @@ func _update_crouch() -> void:
 		# Airborne, the body stays as it is: a crouch that leaves a ledge keeps
 		# the short hitbox for the whole fall, so the arc under a ceiling clears.
 		return
-	var wants_crouch := _is_crouch_held() or not _has_headroom()
+	var wants_crouch := _is_crouch_held() or (_crouched and not _has_headroom())
 	_set_body_crouched(wants_crouch)
 
 ## Detects a wall on either side, excluding walls only a pixel tall so the
@@ -394,10 +526,45 @@ func _update_sprite_facing() -> void:
 	elif not is_zero_approx(velocity.x):
 		_sprite.flip_h = velocity.x < 0.0
 
+## Keep the upcoming route visible at the closer zoom. Wall jumps do not
+## reverse camera lead on every bounce; direction changes on ground ease it.
+func _update_camera_lead(delta: float) -> void:
+	if is_on_floor() and _input_enabled and state != State.DEAD:
+		_camera.position.x = move_toward(_camera.position.x, float(facing)*96.0, delta*400.0)
+
 # --- Main loop ---------------------------------------------------------------
 
 func _physics_process(delta : float) -> void:
+	_update_screen_input(delta)
+	_update_camera_lead(delta)
 	if state == State.DEAD:
+		return
+
+	_dash_cooldown_timer = maxf(_dash_cooldown_timer - delta, 0.0)
+	if is_on_floor() and velocity.y >= 0.0:
+		_dash_available = true
+	_update_facing()
+	if _input_enabled and not is_on_floor() and (Input.is_action_just_pressed("crouch") or _pointer_crouch_this_tick) and _dash_available and _dash_cooldown_timer <= 0.0:
+		_dash_available = false
+		_dash_timer = dash_duration
+		_dash_cooldown_timer = dash_cooldown
+		_dash_direction = facing if facing != 0 else (-1 if _sprite.flip_h else 1)
+		_jump_buffer_timer = 0.0
+		_wall_jump_lockout_timer = 0.0
+		_time_since_grounded = 999.0
+	if _dash_timer > 0.0:
+		var dash_delta := minf(delta, _dash_timer)
+		# move_and_slide uses a full physics tick; prorate the last tick.
+		velocity = Vector2(float(_dash_direction) * dash_speed * dash_delta / delta, 0.0)
+		_dash_timer = maxf(_dash_timer - delta, 0.0)
+		move_and_slide()
+		_set_state(State.DASH)
+		_update_sprite_facing()
+		_update_visual_pose()
+		if is_on_wall() or is_on_floor():
+			_dash_timer = 0.0
+		if _dash_timer <= 0.0:
+			velocity.x = float(_dash_direction) * max_speed
 		return
 
 	# Timers run before movement so buffered inputs are consumed this frame.
@@ -472,3 +639,9 @@ func _resolve_state() -> void:
 	else:
 		_set_state(State.FALL)
 	_update_sprite_facing()
+	_update_visual_pose()
+
+func _update_visual_pose() -> void:
+	if _sprite != null:
+		_sprite.set_pose(VISUAL_POSES[state], _crouched)
+		_sprite.set_motion(velocity.x, max_speed)

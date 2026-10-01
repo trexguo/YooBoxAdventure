@@ -13,6 +13,23 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_a0tqu")
 
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+color = Color(1, 0.9569, 0.8392, 1)
+
+[node name="Heading" type="Label" parent="."]
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 30.0
+offset_bottom = 90.0
+theme_override_font_sizes/font_size = 40
+text = "Choose your delivery"
+horizontal_alignment = 1
+
 [node name="Control" type="Control" parent="." unique_id=1541649425]
 layout_mode = 1
 anchors_preset = 15
@@ -24,20 +41,34 @@ script = ExtResource("2_tjb7s")
 
 [node name="LevelButtonsContainer" type="ItemList" parent="Control" unique_id=17921809]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(400, 0)
+custom_minimum_size = Vector2(900, 480)
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -200.0
-offset_top = -17.5
-offset_right = 200.0
-offset_bottom = 17.5
+offset_left = -450.0
+offset_top = -240.0
+offset_right = 450.0
+offset_bottom = 240.0
 grow_horizontal = 2
 grow_vertical = 2
-auto_height = true
+theme_override_constants/v_separation = 12
+auto_height = false
+
+[node name="BackButton" type="Button" parent="Control"]
+layout_mode = 1
+anchor_left = 0.5
+anchor_right = 0.5
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = -150.0
+offset_right = 150.0
+offset_top = -100.0
+offset_bottom = -36.0
+theme_type_variation = &"BlueButton"
+text = "Back"
 
 [node name="SceneLister" type="Node" parent="." unique_id=1851760223]
 script = ExtResource("3_le4jx")
@@ -45,3 +76,5 @@ files = Array[String](["res://scenes/game/levels/level_1.tscn", "res://scenes/ga
 directory = "res://scenes/game/levels"
 
 [connection signal="item_activated" from="Control/LevelButtonsContainer" to="." method="_on_level_buttons_container_item_activated"]
+
+[connection signal="pressed" from="Control/BackButton" to="." method="_on_back_pressed"]
